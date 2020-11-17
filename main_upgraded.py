@@ -2,6 +2,8 @@ import numpy as np
 import sys, os
 import tensorflow as tf
 from tensorflow.keras import datasets
+import logging
+logging.getLogger("tensorflow").setLevel(logging.INFO)
 from datetime import datetime
 
 class ReconstructionError(tf.keras.losses.Loss):
@@ -13,8 +15,11 @@ class ReconstructionError(tf.keras.losses.Loss):
 
 
 class AutoencoderLayer(tf.keras.layers.Layer):
-    def __init__(self, input_size, nodes):
-        super(AutoencoderLayer, self).__init__()
+    def __init__(self, 
+    input_size, 
+    nodes,
+    **kwargs):
+        super(AutoencoderLayer, self).__init__(name="autoencoderlayer", **kwargs)
         self.input_size = input_size
         self.nodes = nodes
 
@@ -31,35 +36,40 @@ class AutoencoderLayer(tf.keras.layers.Layer):
         )
 
     def call(self, x):
-        return tf.nn.sigmoid(tf.matmul(x, self.w) + self.b)
+        res = tf.nn.sigmoid(tf.matmul(x, self.w) + self.b)
+        print("[INFO] returning autoencoder layer result: ", res)
+        return res
 
 class Autoencoder(tf.keras.layers.Layer):
-    def __init__(self, input_size):
-        super(Autoencoder, self).__init__()
+    def __init__(
+        self, 
+        input_size,
+        **kwargs):
+        super(Autoencoder, self).__init__(name="autoencoder", **kwargs)
         self.firstHiddenLayer = AutoencoderLayer(input_size, 200)
         self.secondHiddenLayer = AutoencoderLayer(200, 100)
         self.thirdHiddenLayer = AutoencoderLayer(100, 200)
         self.outputLayer = AutoencoderLayer(200, input_size)
 
-    def call(self, input):
-        y1 = self.firstHiddenLayer(input)
-        y2 = self.secondHiddenLayer(y1)
-        y3 = self.thirdHiddenLayer(y2)
-        y4 = self.outputLayer(y3)
-        return y4
+    def call(self, x):
+        y = self.firstHiddenLayer(x)
+        y = self.secondHiddenLayer(y)
+        y = self.thirdHiddenLayer(y)
+        y = self.outputLayer(y)
+        print("[INFO] returning autoencoder result:", y)
+        return y
 
 class AutoencoderModel(tf.keras.Model):
     def __init__(
         self,
         input_size,
         **kwargs):
-        super(AutoencoderModel, self).__init__(name='autoencoder', **kwargs)
+        super(AutoencoderModel, self).__init__(name='autoencodermodel', **kwargs)
         self.autoencoder = Autoencoder(input_size=input_size)
     
-    def call(self, input):
-        x_r = self.autoencoder(input)
-        #loss = tf.reduce_sum(input_tensor=tf.math.square(tf.norm(tensor=omega - x_r))) # PCA, TODO: add s variable
-        #self.add_loss(loss)
+    def call(self, x):
+        x_r = self.autoencoder(x)
+        print("[INFO] returning autoencoder model result: ", x_r)
         return x_r
 
 def main(argc, argv):
@@ -74,13 +84,17 @@ def main(argc, argv):
     # os.system("rm -rf logs")
 
     logdir = os.path.join("logs", datetime.now().strftime("%Y%m%d-%H%M%S"))
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=logdir)
     file_writer = tf.summary.create_file_writer(logdir)
-    #with file_writer.as_default():
-    #    images = np.reshape(X_train[0:25], (-1, 28, 28, 1))
-    #    tf.compat.v1.summary.image("Training data", images, max_outputs=25)
-        
-    # file_writer.flush()
 
+    def log_autoencoder_images(epoch, logs):
+        with file_writer.as_default():
+            images = np.reshape(X_train[0:25], (-1, 28, 28, 1))
+            tf.summary.image("Training data", images, max_outputs=25, step=epoch)
+
+    # Define the per-epoch callback.
+    autoencoder_images_callback = tf.keras.callbacks.LambdaCallback(on_epoch_end=log_autoencoder_images)
+    
     # reduce and normalise data
     X_train = np.array([X.ravel() for X in X_train[:n_samples]]) / max_val
     X_test = np.array([X.ravel() for X in X_test[:n_samples]]) / max_val
@@ -93,14 +107,22 @@ def main(argc, argv):
 
     autoencoder = AutoencoderModel(input_size)
 
+    
+
+
     optimizer = tf.keras.optimizers.SGD(learning_rate=1e-3)
     autoencoder.compile(optimizer, loss=ReconstructionError())
-
-    # second X_train should be y_train
-    autoencoder.fit(X_train, X_train, epochs=n_epochs) # batch_size=n_samples? 
+    autoencoder.fit(X_train, 
+    X_train, # TODO: X_train should be y_train
+    verbose=1,
+    callbacks=[tensorboard_callback, autoencoder_images_callback],
+    epochs=n_epochs, 
+    batch_size=n_samples) 
 
     print("Done")
     return 0
+
+
 
 if __name__ == "__main__":
     sys.exit(main(len(sys.argv), sys.argv))
