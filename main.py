@@ -70,14 +70,12 @@ class DeepGAE(tf.Module):
         ]
 
     def __loss(self, omega, S, X_pred):
-        return tf.reduce_mean(tf.square(tf.norm(omega - X_pred)))
+        return tf.reduce_mean(S * tf.square(tf.norm(omega - X_pred))) # TODO: might define in subclass
 
-    def __gradients(self, X):
+    def __gradients(self, X, omega, S):
         with tf.GradientTape() as tape:
-            omega = self.compute_reconstruction_set(X)
-            S = self.compute_reconstruction_weights(X)
             X_pred = self.predict(X)
-            loss_value = self.__loss(X, 1, X_pred)
+            loss_value = self.__loss(omega, S, X_pred)
             grads = tape.gradient(loss_value, self.parameter_list)
         return loss_value, grads
 
@@ -86,8 +84,11 @@ class DeepGAE(tf.Module):
             for epoch in range(epochs):
                 loss_value = 0
                 for X_batch, y_batch in X:
-                    loss_value, grads = self.__gradients(X_batch)
-                    self.optimizer.apply_gradients(zip(grads, self.parameter_list))
+                    # Algorithm 1 Iterative learning procedure for Generalized Autoencoder
+                    omega = self.compute_reconstruction_set(X_batch) # determine the reconstruction set, Ω
+                    S = self.compute_reconstruction_weights(X_batch) # compute the reconstruction weights, S
+                    loss_value, grads = self.__gradients(X_batch, omega, S)
+                    self.optimizer.apply_gradients(zip(grads, self.parameter_list)) # minimize the reconstruction error using SGD
 
                 if epoch % 10 == 0:
                     tf.summary.scalar('loss', loss_value, step=epoch)
@@ -163,14 +164,11 @@ def main(argc, argv):
         
     else:
         print("Training new model...")
-        # Algorithm 1 Iterative learning procedure for Generalized Autoencoder
-        model = DeepGAE(input_size, n_classes, file_writer)
+        
+        model = dGAE_PCA(input_size, n_classes, file_writer)
         # Note! We use keras optimizer.
         # TODO: try with momentum..
-        model.compute_reconstruction_set(X_train)
-        model.compute_reconstruction_weights(X_train)
         model.compile(optimizers.SGD(learning_rate=0.01))
-
         model.fit(X_train, y_train, epochs=n_epochs)
 
         print("Saving model...")
