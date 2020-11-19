@@ -5,6 +5,8 @@ from datetime import datetime
 import tensorflow as tf
 from tensorflow.keras import datasets
 import logging
+import matplotlib.pyplot as plt
+
 logging.getLogger("tensorflow").setLevel(logging.INFO)
 
 class ReconstructionError(tf.keras.losses.Loss):
@@ -20,8 +22,9 @@ class AutoencoderLayer(tf.keras.layers.Layer):
     S, # reconstruction weights
     input_size, 
     nodes,
+    name="autoencoderlayer",
     **kwargs):
-        super(AutoencoderLayer, self).__init__(name="autoencoderlayer", **kwargs)
+        super(AutoencoderLayer, self).__init__(name, **kwargs)
         self.input_size = input_size
         self.nodes = nodes
 
@@ -30,13 +33,13 @@ class AutoencoderLayer(tf.keras.layers.Layer):
             shape=[self.input_size, self.nodes],
             initializer="random_normal",
             trainable=True,
-            name="w"
+            name="W:" + self.name
         )
         self.b = self.add_weight(
             shape=[self.nodes], 
             initializer="random_normal", 
             trainable=True,
-            name="b"
+            name="b:" + self.name
         )
 
     def call(self, x):
@@ -51,10 +54,10 @@ class Autoencoder(tf.keras.layers.Layer):
         input_size,
         **kwargs):
         super(Autoencoder, self).__init__(name="autoencoder", **kwargs)
-        self.firstHiddenLayer = AutoencoderLayer(S, input_size, 200) # TODO: create separate encoder and decoder
-        self.secondHiddenLayer = AutoencoderLayer(S, 200, 100)
-        self.thirdHiddenLayer = AutoencoderLayer(S, 100, 200)
-        self.outputLayer = AutoencoderLayer(S, 200, input_size)
+        self.firstHiddenLayer = AutoencoderLayer(S, input_size, 200, name="dense1") # TODO: create separate encoder and decoder
+        self.secondHiddenLayer = AutoencoderLayer(S, 200, 100, name="dense2")
+        self.thirdHiddenLayer = AutoencoderLayer(S, 100, 200, name="dense3")
+        self.outputLayer = AutoencoderLayer(S, 200, input_size, name="dense4")
 
     def call(self, x):
         y = self.firstHiddenLayer(x)
@@ -98,14 +101,26 @@ class PCA(Methods):
         return X, S
 
 
+def preprocess(X, y, max_value= 255.0, n_classes=10):
+    X_, y_ = X.copy().astype(np.float32), y.copy() # we don't wont to lose original data
+    X_ = X_.reshape((X_.shape[0], X_.shape[1] * X_.shape[2])) / max_value
+    y_ = tf.keras.utils.to_categorical(y, num_classes=n_classes)
+    return X_, y_
+
+def postprocess(X, image_shape=(28, 28)):
+    X = X.reshape((X.shape[0], image_shape[0], image_shape[1])) * 255
+    return X.astype(np.uint8)
+
+
 def main(argc, argv):
-    load_model = True
+    load_model = False
     n_epochs = 10
     n_classes = 10
     n_samples = 1000 # reduce dataset
     max_val = 255
 
     (X_train, y_train), (X_test, y_test) = datasets.mnist.load_data()
+    image_shape = X_train[0].shape
 
     # Clear out any prior log data
     # os.system("rm -rf logs")
@@ -121,11 +136,10 @@ def main(argc, argv):
 
     # Define the per-epoch callback.
     autoencoder_images_callback = tf.keras.callbacks.LambdaCallback(on_epoch_end=log_autoencoder_images)
-    
-    # reduce and normalise data
-    X_train = np.array([X.ravel() for X in X_train[:n_samples]]) / max_val
-    X_test = np.array([X.ravel() for X in X_test[:n_samples]]) / max_val
-    
+
+    # Preprocess data:
+    X_train, y_train = preprocess(X_train[:n_samples], y_train[:n_samples])
+    X_test, y_test = preprocess(X_test[:n_samples], y_test[:n_samples])
     input_size = X_train.shape[1]
 
     method = PCA()
@@ -156,14 +170,18 @@ def main(argc, argv):
             epochs=n_epochs, 
             batch_size=n_samples)
         
-        autoencoder.save_weights(path, overwrite=True)
+        autoencoder.save_weights(path)
 
     # Use the model to output images:
     X_reconstructed = autoencoder.predict(X_test[:10])
+    X_reconstructed = postprocess(X_reconstructed, image_shape)
 
+    # Visualize reconstructed images:
+    fig, axs = plt.subplots(2, 5)
+    for i, ax in enumerate(axs.ravel()):
+        ax.imshow(X_reconstructed[i], cmap='gray')
+    plt.show()
 
-
-    print("Done")
     return 0
 
 
