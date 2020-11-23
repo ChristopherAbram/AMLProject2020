@@ -79,17 +79,22 @@ class DeepGAE(tf.Module):
             grads = tape.gradient(loss_value, self.parameter_list)
         return loss_value, grads
 
-    def fit(self, X, y, epochs=10000):
+    def fit(self, X, y, epochs=10000): # epoch = expected number of iterations until convergence
         with self.file_writer.as_default():
+            omega = self.compute_reconstruction_set(X) # compute the reconstruction set, Ω, based on x_i
+            S = self.compute_reconstruction_weights(X) # compute the reconstruction weights, S, based on x_i
             for epoch in range(epochs):
+                # Algorithm 1 Iterative learning procedure for Generalized Autoencoder
                 loss_value = 0
                 for X_batch, y_batch in X:
-                    # Algorithm 1 Iterative learning procedure for Generalized Autoencoder
-                    omega = self.compute_reconstruction_set(X_batch) # determine the reconstruction set, Ω
-                    S = self.compute_reconstruction_weights(X_batch) # compute the reconstruction weights, S
                     loss_value, grads = self.__gradients(X_batch, omega, S)
                     self.optimizer.apply_gradients(zip(grads, self.parameter_list)) # minimize the reconstruction error using SGD
-
+                
+                # TODO:
+                y = X.map(lambda X_batch, y_batch: (self.encode(X_batch), y_batch))
+                omega = self.compute_reconstruction_set(y) # compute the reconstruction set, Ω, based on y_i
+                S = self.compute_reconstruction_weights(y) # compute the reconstruction weights, S, based on y_i
+                    
                 if epoch % 10 == 0:
                     tf.summary.scalar('loss', loss_value, step=epoch)
                     print("Epoch: ", epoch, "loss_value=", loss_value)
