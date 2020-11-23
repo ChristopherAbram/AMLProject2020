@@ -88,17 +88,19 @@ class DeepGAE(tf.Module):
     def __reconstruction_error_i(self, omega_j, S_j, X_pred):
         # bring X_pred to same dimensions as omega_j to allow for subtraction. 
         # Will enable us to subtract the same data point from each reconstuction element
-        X_pred_dim = tf.map_fn(
-            fn=lambda x: tf.convert_to_tensor([x] * omega_j.shape[1]), 
-            elems=X_pred, 
-            fn_output_signature=tf.TensorSpec(shape=(omega_j.shape[1], omega_j.shape[2])))
-            
-        return tf.reduce_sum(S_j * tf.square(tf.norm(omega_j - X_pred_dim, axis=2)), axis=1)
+        # X_pred_dim = tf.map_fn(
+        #     fn=lambda x: tf.convert_to_tensor([x] * omega_j.shape[1]), 
+        #     elems=X_pred, 
+        #     fn_output_signature=tf.TensorSpec(shape=(omega_j.shape[1], omega_j.shape[2])))
+        X_pred = tf.expand_dims(X_pred, axis=1)
+        return tf.reduce_sum(S_j * tf.square(tf.norm(omega_j - X_pred, axis=2)), axis=1)
 
     # Eqn. 4
     def __loss(self, omega, S, X_pred):
-        # return tf.reduce_sum(S * tf.square(tf.norm(omega - X_pred)))
-        return tf.reduce_sum(self.__reconstruction_error_i(omega, S, X_pred), axis=None)
+        # TODO: maybe derive from 
+        return tf.reduce_sum(
+                    S * tf.square(tf.norm(
+                        omega - tf.expand_dims(X_pred, axis=1), axis=2)))
 
     def __gradients(self, X, omega, S):
         with tf.GradientTape() as tape:
@@ -107,16 +109,16 @@ class DeepGAE(tf.Module):
             grads = tape.gradient(loss_value, self.parameter_list)
         return loss_value, grads
 
-    def fit(self, X, y, epochs=10000): # epoch = expected number of iterations until convergence
+    def fit(self, X, y, epochs=10000): 
+        # epoch = expected number of iterations until convergence
         with self.file_writer.as_default():
-
             # 1. Compute the reconstruction weights Si from {x_i} and
             #    determine the reconstruction set i, e.g. by k-nearest neighbor
             X = X.map(lambda X_batch, y_batch: (
                 X_batch, 
-                y_batch, 
-                self.compute_reconstruction_set(X_batch, y_batch), 
-                self.compute_reconstruction_weights(X_batch, y_batch)
+                y_batch,
+                self.compute_reconstruction_set(None, X_batch, y_batch), 
+                self.compute_reconstruction_weights(None, X_batch, y_batch)
             ))
 
             for epoch in range(epochs):
@@ -124,12 +126,6 @@ class DeepGAE(tf.Module):
                 #    descent and update theta for t steps.
                 loss_value = 0
                 for X_batch, y_batch, omega_batch, S_batch in X:
-
-                    # FIXME: For debugging:
-                    # om_ = self.compute_reconstruction_set(X_batch, y_batch) 
-                    # s_ = self.compute_reconstruction_weights(X_batch, y_batch)
-                    # re_ = self.__reconstruction_error_i(om_, s_, self.predict(X_batch))
-
                     loss_value, grads = self.__gradients(X_batch, omega_batch, S_batch)
                     # minimize the reconstruction error using SGD
                     self.optimizer.apply_gradients(zip(grads, self.parameter_list)) 
@@ -148,25 +144,41 @@ class DeepGAE(tf.Module):
         return (
             X_batch, 
             y_batch, 
-            self.compute_reconstruction_set(encoded, y_batch), 
-            self.compute_reconstruction_weights(encoded, y_batch)
+            self.compute_reconstruction_set(encoded, X_batch, y_batch), 
+            self.compute_reconstruction_weights(encoded, X_batch, y_batch)
         )
 
     def evaluate(self):
         pass
 
-class dGAE_PCA(DeepGAE):
+class DeepPCA(DeepGAE):
     def __init__(self, layers, n_classes, file_writer):
-        super(dGAE_PCA, self).__init__(layers, n_classes, file_writer)
+        super(DeepPCA, self).__init__(layers, n_classes, file_writer)
+        self.recalculate_reconstruction_sets = False
+
+    def compute_reconstruction_set(self, encoded_batch, X_batch, y_batch):
+        return tf.map_fn(fn=lambda x: tf.convert_to_tensor([x]), elems=X_batch, 
+            fn_output_signature=tf.TensorSpec(shape=(1, X_batch.shape[1])))
+
+    def compute_reconstruction_weights(self, encoded_batch, X_batch, y_batch):
+        return tf.map_fn(fn=lambda x: tf.convert_to_tensor([1.0], dtype=tf.float32), elems=X_batch, 
+            fn_output_signature=tf.TensorSpec(shape=(1,)))
+
+class DeepLDA(DeepGAE):
+    def __init__(self, layers, n_classes, file_writer):
+        super(DeepLDA, self).__init__(layers, n_classes, file_writer)
         self.recalculate_reconstruction_sets = True
 
-    def compute_reconstruction_set(self, X_batch, y_batch):
-        return tf.map_fn(fn=lambda x: tf.convert_to_tensor([x,x]), elems=X_batch, 
-            fn_output_signature=tf.TensorSpec(shape=(2, X_batch.shape[1])))
+    def compute_reconstruction_set(self, encoded_batch, X_batch, y_batch):
+        # TODO: impl
+        return tf.map_fn(fn=lambda x: tf.convert_to_tensor([x]), elems=X_batch, 
+            fn_output_signature=tf.TensorSpec(shape=(1, X_batch.shape[1])))
 
-    def compute_reconstruction_weights(self, X_batch, y_batch):
-        return tf.map_fn(fn=lambda x: tf.convert_to_tensor([0.5,0.5], dtype=tf.float32), elems=X_batch, 
-            fn_output_signature=tf.TensorSpec(shape=(2,)))
+    def compute_reconstruction_weights(self, encoded_batch, X_batch, y_batch):
+        # TODO: impl
+        return tf.map_fn(fn=lambda x: tf.convert_to_tensor([1.0], dtype=tf.float32), elems=X_batch, 
+            fn_output_signature=tf.TensorSpec(shape=(1,)))
+
 
 def save_model(model, filepath):
     tf.saved_model.save(model, filepath)
@@ -208,7 +220,7 @@ def main(argc, argv):
     batch_size = 64
     n_samples = 1000 # reduce dataset
     image_shape = (28, 28)
-    load_existing_model = False
+    load_existing_model = True
     save_path = '.model'
 
     (X_train, y_train), (X_test, y_test) = dataset(batch_size, n_samples)
@@ -229,10 +241,9 @@ def main(argc, argv):
     else:
         print("Training new model...")
         
-        model = dGAE_PCA([input_size, 200, 100], n_classes, file_writer)
+        model = DeepPCA([input_size, 200, 100], n_classes, file_writer)
         # Note! We use keras optimizer.
         # TODO: try with momentum..
-        model.recalculate_reconstruction_sets = True
         model.compile(optimizers.SGD(learning_rate=0.01))
         model.fit(X_train, y_train, epochs=n_epochs)
         print("Saving model...")
@@ -242,17 +253,21 @@ def main(argc, argv):
     Xr = X_test.unbatch() \
         .map(lambda X, y: (postprocess(X, image_shape), X)) \
         .batch(batch_size) \
-        .map(lambda Xp, X: (Xp, model.predict(X))) \
+        .map(lambda Xp, X: (Xp, model.predict(X), model.encode(X))) \
         .unbatch() \
-        .map(lambda Xp, X: (Xp, postprocess(X))) \
-        .take(15)
+        .map(lambda Xp, X, Xen: (Xp, postprocess(X), postprocess(Xen, (10, 10)))) \
+        .take(27)
 
     # Visualize reconstructed images:
-    fig, axs = plt.subplots(5, 6)
+    fig, axs = plt.subplots(9, 9, figsize=(10, 10))
     axs_ = axs.ravel()
-    for i, (img_org, img_pred) in enumerate(Xr):
-        axs_[i * 2].imshow(img_pred, cmap='gray')
-        axs_[i * 2 + 1].imshow(img_org, cmap='gray')
+    for i, (img_org, img_pred, img_encoded) in enumerate(Xr):
+        axs_[i * 3].axis('off')
+        axs_[i * 3 + 1].axis('off')
+        axs_[i * 3 + 2].axis('off')
+        axs_[i * 3].imshow(img_pred, cmap='gray')
+        axs_[i * 3 + 1].imshow(img_org, cmap='gray')
+        axs_[i * 3 + 2].imshow(img_encoded, cmap='gray')
         
     plt.show()
 
