@@ -66,8 +66,8 @@ class DeepGAE(tf.Module):
         # Hidden layers:
         last_layer_size = self.input_size
         for i, layer in enumerate(self.layers):
-            self.encoding_W.append(tf.Variable(tf.random.normal(shape=[last_layer_size, layer]), name='e-W{i}', trainable=True, dtype=tf.float32))
-            self.encoding_b.append(tf.Variable(tf.random.normal(shape=[layer]), name='e-b{i}', trainable=True))
+            self.encoding_W.append(tf.Variable(tf.random.normal(shape=[last_layer_size, layer]), name='e-W%d' % i, trainable=True, dtype=tf.float32))
+            self.encoding_b.append(tf.Variable(tf.random.normal(shape=[layer]), name='e-b%d' % i, trainable=True))
             self.encoding_layers.append(lambda X: tf.nn.sigmoid(X @ self.encoding_W[i] + self.encoding_b[i]))
             self.parameter_list.append(self.encoding_W[i])
             self.parameter_list.append(self.encoding_b[i])
@@ -76,8 +76,8 @@ class DeepGAE(tf.Module):
         layers = self.layers[::-1][1:]
         layers.append(self.input_size)
         for i, layer in enumerate(layers):
-            self.decoding_W.append(tf.Variable(tf.random.normal(shape=[last_layer_size, layer]), name='d-W{i}', trainable=True, dtype=tf.float32))
-            self.decoding_b.append(tf.Variable(tf.random.normal(shape=[layer]), name='d-b{i}', trainable=True))
+            self.decoding_W.append(tf.Variable(tf.random.normal(shape=[last_layer_size, layer]), name='d-W%d' % i, trainable=True, dtype=tf.float32))
+            self.decoding_b.append(tf.Variable(tf.random.normal(shape=[layer]), name='d-b%d' % i, trainable=True))
             self.decoding_layers.append(lambda X: tf.nn.sigmoid(X @ self.decoding_W[i] + self.decoding_b[i]))
             self.parameter_list.append(self.decoding_W[i])
             self.parameter_list.append(self.decoding_b[i])
@@ -115,19 +115,21 @@ class DeepGAE(tf.Module):
 
     def fit(self, X, y, epochs=10000): # epoch = expected number of iterations until convergence
         with self.file_writer.as_default():
-            omega = self.compute_reconstruction_set(X) # compute the reconstruction set, Ω, based on x_i
-            S = self.compute_reconstruction_weights(X) # compute the reconstruction weights, S, based on x_i
+            # omega = self.compute_reconstruction_set(X) # compute the reconstruction set, Ω, based on x_i
+            # S = self.compute_reconstruction_weights(X) # compute the reconstruction weights, S, based on x_i
             for epoch in range(epochs):
                 # Algorithm 1 Iterative learning procedure for Generalized Autoencoder
                 loss_value = 0
                 for X_batch, y_batch in X:
+                    omega = self.compute_reconstruction_set(X_batch) # compute the reconstruction set, Ω, based on x_i
+                    S = self.compute_reconstruction_weights(X_batch) # compute the reconstruction weights, S, based on x_i
                     loss_value, grads = self.__gradients(X_batch, omega, S)
                     self.optimizer.apply_gradients(zip(grads, self.parameter_list)) # minimize the reconstruction error using SGD
                 
                 # TODO:
-                y = X.map(lambda X_batch, y_batch: (self.encode(X_batch), y_batch))
-                omega = self.compute_reconstruction_set(y) # compute the reconstruction set, Ω, based on y_i
-                S = self.compute_reconstruction_weights(y) # compute the reconstruction weights, S, based on y_i
+                #y = X.map(lambda X_batch, y_batch: (self.encode(X_batch), y_batch))
+                # omega = self.compute_reconstruction_set(y) # compute the reconstruction set, Ω, based on y_i
+                # S = self.compute_reconstruction_weights(y) # compute the reconstruction weights, S, based on y_i
                     
                 if epoch % 10 == 0:
                     tf.summary.scalar('loss', loss_value, step=epoch)
