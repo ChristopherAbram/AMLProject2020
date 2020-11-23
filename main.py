@@ -18,12 +18,19 @@ print(('\nYour devices that are available:\n{0}').format(
 ))
 
 class DeepGAE(tf.Module):
-    def __init__(self, input_size, n_classes, file_writer):
+    def __init__(self, layers, input_size, n_classes, file_writer):
         super(DeepGAE, self).__init__(name="DeepGAE")
+        self.layers = layers
         self.input_size = input_size
         self.n_classes = n_classes
         self.file_writer = file_writer
         self.parameter_list = None
+        self.encoding_W = []
+        self.encoding_b = []
+        self.encoding_layers = []
+        self.decoding_W = []
+        self.decoding_b = []
+        self.decoding_layers = []
 
     def compute_reconstruction_set(self, X):
         pass 
@@ -33,41 +40,68 @@ class DeepGAE(tf.Module):
 
     @tf.function
     def predict(self, X):
-        y1 = self.layer1(X)
-        y2 = self.layer2(y1)
-        y3 = self.layer3(y2)
-        return self.layer4(y3)
+        return self.decode(self.encode(X))
+
+    @tf.function
+    def encode(self, X):
+        Y = X
+        for layer in self.encoding_layers:
+            Y = layer(Y)
+        return Y
+    
+    @tf.function
+    def decode(self, Y):
+        X = Y
+        for layer in self.decoding_layers:
+            X = layer(X)
+        return X
 
     def __call__(self, X):
         return self.predict(X)
 
     def compile(self, optimizer):
         self.optimizer = optimizer
+        self.parameter_list = []
 
         # Hidden layers:
-        self.W1 = tf.Variable(tf.random.normal(shape=[self.input_size, 200]), name='W1', trainable=True, dtype=tf.float32)
-        self.b1 = tf.Variable(tf.random.normal(shape=[200]), name='b1', trainable=True)
-        self.layer1 = lambda X: tf.nn.sigmoid(X @ self.W1 + self.b1) # first hidden layer (200 nodes)
+        last_layer_size = self.input_size
+        for i, layer in enumerate(self.layers):
+            self.encoding_W.append(tf.Variable(tf.random.normal(shape=[last_layer_size, layer]), name='e-W{i}', trainable=True, dtype=tf.float32))
+            self.encoding_b.append(tf.Variable(tf.random.normal(shape=[layer]), name='e-b{i}', trainable=True))
+            self.encoding_layers.append(lambda X: tf.nn.sigmoid(X @ self.encoding_W[i] + self.encoding_b[i]))
+            self.parameter_list.append(self.encoding_W[i])
+            self.parameter_list.append(self.encoding_b[i])
+            last_layer_size = layer
 
-        self.W2 = tf.Variable(tf.random.normal(shape=[200, 100]), name='W2', trainable=True)
-        self.b2 = tf.Variable(tf.random.normal(shape=[100]), name='b2', trainable=True)
-        self.layer2 = lambda X: tf.nn.sigmoid(X @ self.W2 + self.b2) # second hidden layer / bottle neck (compressed) (100 nodes)
+        layers = self.layers[::-1][1:]
+        layers.append(self.input_size)
+        for i, layer in enumerate(layers):
+            self.decoding_W.append(tf.Variable(tf.random.normal(shape=[last_layer_size, layer]), name='d-W{i}', trainable=True, dtype=tf.float32))
+            self.decoding_b.append(tf.Variable(tf.random.normal(shape=[layer]), name='d-b{i}', trainable=True))
+            self.decoding_layers.append(lambda X: tf.nn.sigmoid(X @ self.decoding_W[i] + self.decoding_b[i]))
+            self.parameter_list.append(self.decoding_W[i])
+            self.parameter_list.append(self.decoding_b[i])
+            last_layer_size = layer
 
-        self.W3 = tf.Variable(tf.random.normal(shape=[100, 200]), name='W3', trainable=True)
-        self.b3 = tf.Variable(tf.random.normal(shape=[200]), name='b3', trainable=True)
-        self.layer3 = lambda X: tf.nn.sigmoid(X @ self.W3 + self.b3) # third hidden layer (200 nodes)
+        # self.W2 = tf.Variable(tf.random.normal(shape=[200, 100]), name='W2', trainable=True)
+        # self.b2 = tf.Variable(tf.random.normal(shape=[100]), name='b2', trainable=True)
+        # self.layer2 = lambda X: tf.nn.sigmoid(X @ self.W2 + self.b2) # second hidden layer / bottle neck (compressed) (100 nodes)
 
-        # Output layer:
-        self.W4 = tf.Variable(tf.random.normal(shape=[200, self.input_size]), name='W4', trainable=True, dtype=tf.float32)
-        self.b4 = tf.Variable(tf.random.normal(shape=[self.input_size]), name='b4', trainable=True)
-        self.layer4 = lambda X: tf.nn.sigmoid(X @ self.W4 + self.b4) # output layer / reconstruction
+        # self.W3 = tf.Variable(tf.random.normal(shape=[100, 200]), name='W3', trainable=True)
+        # self.b3 = tf.Variable(tf.random.normal(shape=[200]), name='b3', trainable=True)
+        # self.layer3 = lambda X: tf.nn.sigmoid(X @ self.W3 + self.b3) # third hidden layer (200 nodes)
 
-        self.parameter_list = [
-            self.W1, self.b1,
-            self.W2, self.b2,
-            self.W3, self.b3,
-            self.W4, self.b4,
-        ]
+        # # Output layer:
+        # self.W4 = tf.Variable(tf.random.normal(shape=[200, self.input_size]), name='W4', trainable=True, dtype=tf.float32)
+        # self.b4 = tf.Variable(tf.random.normal(shape=[self.input_size]), name='b4', trainable=True)
+        # self.layer4 = lambda X: tf.nn.sigmoid(X @ self.W4 + self.b4) # output layer / reconstruction
+
+        # self.parameter_list = [
+        #     self.W1, self.b1,
+        #     self.W2, self.b2,
+        #     self.W3, self.b3,
+        #     self.W4, self.b4,
+        # ]
 
     def __loss(self, omega, S, X_pred):
         return tf.reduce_mean(S * tf.square(tf.norm(omega - X_pred))) # TODO: might define in subclass
@@ -170,7 +204,7 @@ def main(argc, argv):
     else:
         print("Training new model...")
         
-        model = dGAE_PCA(input_size, n_classes, file_writer)
+        model = dGAE_PCA([200,100], input_size, n_classes, file_writer)
         # Note! We use keras optimizer.
         # TODO: try with momentum..
         model.compile(optimizers.SGD(learning_rate=0.01))
