@@ -18,10 +18,9 @@ print(('\nYour devices that are available:\n{0}').format(
 ))
 
 class DeepGAE(tf.Module):
-    def __init__(self, layers, input_size, n_classes, file_writer):
+    def __init__(self, layers, n_classes, file_writer):
         super(DeepGAE, self).__init__(name="DeepGAE")
         self.layers = layers
-        self.input_size = input_size
         self.n_classes = n_classes
         self.file_writer = file_writer
         self.parameter_list = None
@@ -31,12 +30,7 @@ class DeepGAE(tf.Module):
         self.decoding_W = []
         self.decoding_b = []
         self.decoding_layers = []
-
-    def compute_reconstruction_set(self, X):
-        pass 
-    
-    def compute_reconstruction_weights(self, X):
-        pass
+        self.recalculate_reconstruction_sets = True
 
     @tf.function
     def predict(self, X):
@@ -56,6 +50,7 @@ class DeepGAE(tf.Module):
             X = layer(X)
         return X
 
+    @tf.function
     def __call__(self, X):
         return self.predict(X)
 
@@ -64,47 +59,46 @@ class DeepGAE(tf.Module):
         self.parameter_list = []
 
         # Hidden layers:
-        last_layer_size = self.input_size
-        for i, layer in enumerate(self.layers):
-            self.encoding_W.append(tf.Variable(tf.random.normal(shape=[last_layer_size, layer]), name='e-W%d' % i, trainable=True, dtype=tf.float32))
-            self.encoding_b.append(tf.Variable(tf.random.normal(shape=[layer]), name='e-b%d' % i, trainable=True))
-            self.encoding_layers.append(lambda X: tf.nn.sigmoid(X @ self.encoding_W[i] + self.encoding_b[i]))
+        layers = self.layers[1:]
+        last_layer_size = self.layers[0]
+        for i, layer in enumerate(layers):
+            self.encoding_W.append(tf.Variable(
+                tf.random.normal(shape=[last_layer_size, layer]), name='e-W%d' % i, trainable=True, dtype=tf.float32))
+            self.encoding_b.append(tf.Variable(
+                tf.random.normal(shape=[layer]), name='e-b%d' % i, trainable=True))
+            self.encoding_layers.append(lambda X, j=i: tf.nn.sigmoid(X @ self.encoding_W[j] + self.encoding_b[j]))
             self.parameter_list.append(self.encoding_W[i])
             self.parameter_list.append(self.encoding_b[i])
             last_layer_size = layer
 
         layers = self.layers[::-1][1:]
-        layers.append(self.input_size)
         for i, layer in enumerate(layers):
-            self.decoding_W.append(tf.Variable(tf.random.normal(shape=[last_layer_size, layer]), name='d-W%d' % i, trainable=True, dtype=tf.float32))
-            self.decoding_b.append(tf.Variable(tf.random.normal(shape=[layer]), name='d-b%d' % i, trainable=True))
-            self.decoding_layers.append(lambda X: tf.nn.sigmoid(X @ self.decoding_W[i] + self.decoding_b[i]))
+            self.decoding_W.append(tf.Variable(
+                tf.random.normal(shape=[last_layer_size, layer]), name='d-W%d' % i, trainable=True, dtype=tf.float32))
+            self.decoding_b.append(tf.Variable(
+                tf.random.normal(shape=[layer]), name='d-b%d' % i, trainable=True))
+            self.decoding_layers.append(lambda X, j=i: tf.nn.sigmoid(X @ self.decoding_W[j] + self.decoding_b[j]))
             self.parameter_list.append(self.decoding_W[i])
             self.parameter_list.append(self.decoding_b[i])
             last_layer_size = layer
 
-        # self.W2 = tf.Variable(tf.random.normal(shape=[200, 100]), name='W2', trainable=True)
-        # self.b2 = tf.Variable(tf.random.normal(shape=[100]), name='b2', trainable=True)
-        # self.layer2 = lambda X: tf.nn.sigmoid(X @ self.W2 + self.b2) # second hidden layer / bottle neck (compressed) (100 nodes)
+        return 
 
-        # self.W3 = tf.Variable(tf.random.normal(shape=[100, 200]), name='W3', trainable=True)
-        # self.b3 = tf.Variable(tf.random.normal(shape=[200]), name='b3', trainable=True)
-        # self.layer3 = lambda X: tf.nn.sigmoid(X @ self.W3 + self.b3) # third hidden layer (200 nodes)
+    # Eqn. 3
+    def __reconstruction_error_i(self, omega_j, S_j, X_pred):
+        # bring X_pred to same dimensions as omega_j to allow for subtraction. 
+        # Will enable us to subtract the same data point from each reconstuction element
+        X_pred_dim = tf.map_fn(
+            fn=lambda x: tf.convert_to_tensor([x] * omega_j.shape[1]), 
+            elems=X_pred, 
+            fn_output_signature=tf.TensorSpec(shape=(omega_j.shape[1], omega_j.shape[2])))
+            
+        return tf.reduce_sum(S_j * tf.square(tf.norm(omega_j - X_pred_dim, axis=2)), axis=1)
 
-        # # Output layer:
-        # self.W4 = tf.Variable(tf.random.normal(shape=[200, self.input_size]), name='W4', trainable=True, dtype=tf.float32)
-        # self.b4 = tf.Variable(tf.random.normal(shape=[self.input_size]), name='b4', trainable=True)
-        # self.layer4 = lambda X: tf.nn.sigmoid(X @ self.W4 + self.b4) # output layer / reconstruction
-
-        # self.parameter_list = [
-        #     self.W1, self.b1,
-        #     self.W2, self.b2,
-        #     self.W3, self.b3,
-        #     self.W4, self.b4,
-        # ]
-
+    # Eqn. 4
     def __loss(self, omega, S, X_pred):
-        return tf.reduce_mean(S * tf.square(tf.norm(omega - X_pred))) # TODO: might define in subclass
+        # return tf.reduce_sum(S * tf.square(tf.norm(omega - X_pred)))
+        return tf.reduce_sum(self.__reconstruction_error_i(omega, S, X_pred), axis=None)
 
     def __gradients(self, X, omega, S):
         with tf.GradientTape() as tape:
@@ -115,35 +109,64 @@ class DeepGAE(tf.Module):
 
     def fit(self, X, y, epochs=10000): # epoch = expected number of iterations until convergence
         with self.file_writer.as_default():
-            # omega = self.compute_reconstruction_set(X) # compute the reconstruction set, Ω, based on x_i
-            # S = self.compute_reconstruction_weights(X) # compute the reconstruction weights, S, based on x_i
+
+            # 1. Compute the reconstruction weights Si from {x_i} and
+            #    determine the reconstruction set i, e.g. by k-nearest neighbor
+            X = X.map(lambda X_batch, y_batch: (
+                X_batch, 
+                y_batch, 
+                self.compute_reconstruction_set(X_batch, y_batch), 
+                self.compute_reconstruction_weights(X_batch, y_batch)
+            ))
+
             for epoch in range(epochs):
-                # Algorithm 1 Iterative learning procedure for Generalized Autoencoder
+                # 2. Minimize E in Eqn.4 using the stochastic gradient 
+                #    descent and update theta for t steps.
                 loss_value = 0
-                for X_batch, y_batch in X:
-                    omega = self.compute_reconstruction_set(X_batch) # compute the reconstruction set, Ω, based on x_i
-                    S = self.compute_reconstruction_weights(X_batch) # compute the reconstruction weights, S, based on x_i
-                    loss_value, grads = self.__gradients(X_batch, omega, S)
-                    self.optimizer.apply_gradients(zip(grads, self.parameter_list)) # minimize the reconstruction error using SGD
+                for X_batch, y_batch, omega_batch, S_batch in X:
+
+                    # FIXME: For debugging:
+                    # om_ = self.compute_reconstruction_set(X_batch, y_batch) 
+                    # s_ = self.compute_reconstruction_weights(X_batch, y_batch)
+                    # re_ = self.__reconstruction_error_i(om_, s_, self.predict(X_batch))
+
+                    loss_value, grads = self.__gradients(X_batch, omega_batch, S_batch)
+                    # minimize the reconstruction error using SGD
+                    self.optimizer.apply_gradients(zip(grads, self.parameter_list)) 
                 
-                # TODO:
-                #y = X.map(lambda X_batch, y_batch: (self.encode(X_batch), y_batch))
-                # omega = self.compute_reconstruction_set(y) # compute the reconstruction set, Ω, based on y_i
-                # S = self.compute_reconstruction_weights(y) # compute the reconstruction weights, S, based on y_i
+                # 3. Compute the hidden representation y_i, and update S_i and omega_i from y_i
+                if self.recalculate_reconstruction_sets:
+                    X = X.map(self.recalculate_reconstruction)
                     
                 if epoch % 10 == 0:
                     tf.summary.scalar('loss', loss_value, step=epoch)
                     print("Epoch: ", epoch, "loss_value=", loss_value)
 
+    def recalculate_reconstruction(self, X_batch, y_batch, omega_batch, s_batch):
+        # omega and s are discarded and recalculated
+        encoded = self.encode(X_batch)
+        return (
+            X_batch, 
+            y_batch, 
+            self.compute_reconstruction_set(encoded, y_batch), 
+            self.compute_reconstruction_weights(encoded, y_batch)
+        )
+
     def evaluate(self):
         pass
 
 class dGAE_PCA(DeepGAE):
-    def compute_reconstruction_set(self, X):
-        return X
+    def __init__(self, layers, n_classes, file_writer):
+        super(dGAE_PCA, self).__init__(layers, n_classes, file_writer)
+        self.recalculate_reconstruction_sets = True
 
-    def compute_reconstruction_weights(self, X):
-        return np.ones(X.shape)
+    def compute_reconstruction_set(self, X_batch, y_batch):
+        return tf.map_fn(fn=lambda x: tf.convert_to_tensor([x,x]), elems=X_batch, 
+            fn_output_signature=tf.TensorSpec(shape=(2, X_batch.shape[1])))
+
+    def compute_reconstruction_weights(self, X_batch, y_batch):
+        return tf.map_fn(fn=lambda x: tf.convert_to_tensor([0.5,0.5], dtype=tf.float32), elems=X_batch, 
+            fn_output_signature=tf.TensorSpec(shape=(2,)))
 
 def save_model(model, filepath):
     tf.saved_model.save(model, filepath)
@@ -180,12 +203,12 @@ def dataset(batch_size, limit_train_samples=0):
 
 
 def main(argc, argv):
-    n_epochs = 200
+    n_epochs = 100
     n_classes = 10
     batch_size = 64
     n_samples = 1000 # reduce dataset
     image_shape = (28, 28)
-    load_existing_model = True
+    load_existing_model = False
     save_path = '.model'
 
     (X_train, y_train), (X_test, y_test) = dataset(batch_size, n_samples)
@@ -206,12 +229,12 @@ def main(argc, argv):
     else:
         print("Training new model...")
         
-        model = dGAE_PCA([200,100], input_size, n_classes, file_writer)
+        model = dGAE_PCA([input_size, 200, 100], n_classes, file_writer)
         # Note! We use keras optimizer.
         # TODO: try with momentum..
+        model.recalculate_reconstruction_sets = True
         model.compile(optimizers.SGD(learning_rate=0.01))
         model.fit(X_train, y_train, epochs=n_epochs)
-
         print("Saving model...")
         save_model(model, save_path)
 
