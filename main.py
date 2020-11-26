@@ -5,6 +5,7 @@ import tensorflow as tf
 from tensorflow.keras import datasets, optimizers
 from datetime import datetime
 import matplotlib.pyplot as plt
+import functools as ft
 
 # tf.python.framework.ops.disable_eager_execution()
 
@@ -82,7 +83,7 @@ class DeepGAE(tf.Module):
             self.parameter_list.append(self.decoding_b[i])
             last_layer_size = layer
 
-        return 
+        return
 
     # Eqn. 3
     def __reconstruction_error_i(self, omega_j, S_j, X_pred):
@@ -97,10 +98,9 @@ class DeepGAE(tf.Module):
 
     # Eqn. 4
     def __loss(self, omega, S, X_pred):
-        # TODO: maybe derive from 
         return tf.reduce_sum(
                     S * tf.square(tf.norm(
-                        omega - tf.expand_dims(X_pred, axis=1), axis=2)))
+                        omega - tf.expand_dims(X_pred, axis=1), axis=2))) # works due to broadcasting
 
     def __gradients(self, X, omega, S):
         with tf.GradientTape() as tape:
@@ -109,11 +109,22 @@ class DeepGAE(tf.Module):
             grads = tape.gradient(loss_value, self.parameter_list)
         return loss_value, grads
 
+    def preprocess(self, X, y):
+        return X, y
+
     def fit(self, X, y, epochs=10000): 
         # epoch = expected number of iterations until convergence
         with self.file_writer.as_default():
             # 1. Compute the reconstruction weights Si from {x_i} and
             #    determine the reconstruction set i, e.g. by k-nearest neighbor
+            X, y = self.preprocess(X, y)
+
+            # For debugging:
+            for X_batch, y_batch in X:
+                encoded = self.encode(X_batch)
+                self.compute_reconstruction_set(encoded, X_batch, y_batch), 
+                self.compute_reconstruction_weights(encoded, X_batch, y_batch)
+
             X = X.map(lambda X_batch, y_batch: (
                 X_batch, 
                 y_batch,
@@ -141,12 +152,31 @@ class DeepGAE(tf.Module):
     def recalculate_reconstruction(self, X_batch, y_batch, omega_batch, s_batch):
         # omega and s are discarded and recalculated
         encoded = self.encode(X_batch)
+
+        # For debugging:
+        # self.compute_reconstruction_set(encoded, X_batch, y_batch), 
+        # self.compute_reconstruction_weights(encoded, X_batch, y_batch)
+
         return (
             X_batch, 
             y_batch, 
             self.compute_reconstruction_set(encoded, X_batch, y_batch), 
             self.compute_reconstruction_weights(encoded, X_batch, y_batch)
         )
+
+    def get_class_label(self, y): #possibly shouldn't be member of class
+        return tf.argmax(y, axis=0).numpy()
+
+    def get_class_division(self, X, y): #possibly shouldn't be member of class
+        classes = [[] for i in range(self.n_classes)]
+        for X_batch, y_batch in X:
+            # batch_size = X_batch.shape[0]
+            for i, x in enumerate(X_batch):
+                class_label = self.get_class_label(y_batch[i])
+                classes[class_label].append(x)
+        
+        classes = [tf.convert_to_tensor(c) for c in classes]
+        return classes
 
     def evaluate(self):
         pass
@@ -167,18 +197,109 @@ class DeepPCA(DeepGAE):
 class DeepLDA(DeepGAE):
     def __init__(self, layers, n_classes, file_writer):
         super(DeepLDA, self).__init__(layers, n_classes, file_writer)
-        self.recalculate_reconstruction_sets = True
+        self.recalculate_reconstruction_sets = False
+        self.omega_classes = None
+
+    def preprocess(self, X, y):
+        omega_classes = self.get_class_division(X, y)
+        self.omega_classes_count = self.count_class_instances(omega_classes)
+        self.omega_classes = self.pad_sublists(omega_classes)
+        return X, y
+
+    def count_class_instances(self, l):
+        return [len(li) for li in l]
+
+    def get_longest_sublist(self, l): #possibly shouldn't be member of class
+        return len(max(l,key=len))
+
+    def pad_sublists(self, l): #possibly shouldn't be member of class
+        max_len = self.get_longest_sublist(l)
+        for li in l:
+            li.extend([0 for _ in range(784)] * (max_len - len(li)))
+        return l
+    
+    def get_class_instances(self, y_batch, i):
+        # get list of data points in whole data set belonging to class
+        return self.omega_classes[ \
+            # get class label from category vector
+            self.get_class_label( \
+                # category vector of i'th data point in batch
+                y_batch[i] 
+            )
+        ]
+
+    def get_class_sizes(self, y_batch, i):
+        # get size of classes based on whole dataset
+        return self.omega_classes_count[ \
+            # get class label from category vector
+            self.get_class_label( \
+                # category vector of i'th data point in batch
+                y_batch[i] 
+            )
+        ]
 
     def compute_reconstruction_set(self, encoded_batch, X_batch, y_batch):
-        # TODO: impl
+        max_len = self.get_longest_sublist(self.omega_classes)
+        return tf.map_fn(
+            fn=lambda i: \
+                # convert list to tensor
+                tf.convert_to_tensor(
+                    # get data points related to i'th data point in batch
+                    self.get_class_instances(y_batch, i.numpy())
+                ), 
+            elems=tf.range(X_batch.shape[0]),
+            fn_output_signature=tf.TensorSpec(shape=(max_len, X_batch.shape[1]))
+        )
+
+    def compute_reconstruction_weights(self, encoded_batch, X_batch, y_batch):
+        max_len = self.get_longest_sublist(self.omega_classes)
+        return tf.map_fn(
+            fn=lambda i: \
+                # convert list to tensor
+                tf.convert_to_tensor(
+                    # get the reciprocal length of list and make into list
+                    [
+                        1/self.get_class_sizes(y_batch, i.numpy())
+                    ] * max_len, 
+                    dtype=tf.float32
+                ), 
+            elems=tf.range(X_batch.shape[0]), 
+            fn_output_signature=tf.TensorSpec(shape=(max_len,)))
+
+class DeepMFA(DeepGAE):
+    def __init__(self, layers, n_classes, file_writer):
+        super(DeepMFA, self).__init__(layers, n_classes, file_writer)
+        self.recalculate_reconstruction_sets = True
+        self.omega_classes = None
+
+    def preprocess(self, X, y):
+        # 1. group points into classes
+        self.omega_classes = np.array(self.get_class_division(X, y))
+        # 2. 
+
+        return X, y
+    
+    def knn(self, xj, data, k=18):
+        distances = tf.norm(xj - data, axis=1)
+        _, top_k_indices = tf.nn.top_k(tf.negative(distances), k=k)
+        return tf.gather(data, top_k_indices)
+        
+    
+    def compute_reconstruction_set(self, encoded_batch, X_batch, y_batch):
+        for Ci, X_class in enumerate(self.omega_classes):
+            class_inx=list(range(self.n_classes))
+            class_inx.pop(Ci)
+            for x in X_class:
+                omega_k1 = self.knn(x, tf.convert_to_tensor(X_class))
+                omega_k2 = self.knn(x, tf.convert_to_tensor(self.omega_classes[class_inx]))
+                # merge the two omegas and put into tensor
+        
         return tf.map_fn(fn=lambda x: tf.convert_to_tensor([x]), elems=X_batch, 
             fn_output_signature=tf.TensorSpec(shape=(1, X_batch.shape[1])))
 
     def compute_reconstruction_weights(self, encoded_batch, X_batch, y_batch):
-        # TODO: impl
         return tf.map_fn(fn=lambda x: tf.convert_to_tensor([1.0], dtype=tf.float32), elems=X_batch, 
             fn_output_signature=tf.TensorSpec(shape=(1,)))
-
 
 def save_model(model, filepath):
     tf.saved_model.save(model, filepath)
@@ -220,7 +341,7 @@ def main(argc, argv):
     batch_size = 64
     n_samples = 1000 # reduce dataset
     image_shape = (28, 28)
-    load_existing_model = True
+    load_existing_model = False
     save_path = '.model'
 
     (X_train, y_train), (X_test, y_test) = dataset(batch_size, n_samples)
@@ -241,7 +362,7 @@ def main(argc, argv):
     else:
         print("Training new model...")
         
-        model = DeepPCA([input_size, 200, 100], n_classes, file_writer)
+        model = DeepLDA([input_size, 200, 100], n_classes, file_writer)
         # Note! We use keras optimizer.
         # TODO: try with momentum..
         model.compile(optimizers.SGD(learning_rate=0.01))
@@ -268,7 +389,7 @@ def main(argc, argv):
         axs_[i * 3].imshow(img_pred, cmap='gray')
         axs_[i * 3 + 1].imshow(img_org, cmap='gray')
         axs_[i * 3 + 2].imshow(img_encoded, cmap='gray')
-        
+
     plt.show()
 
     return 0
