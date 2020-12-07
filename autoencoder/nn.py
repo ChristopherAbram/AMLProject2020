@@ -1,33 +1,9 @@
 import numpy as np
-import sys, os
-
 import tensorflow as tf
-from tensorflow.keras import datasets, optimizers, layers
+import os
 from datetime import datetime
-import matplotlib.pyplot as plt
-import functools as ft
 
-# tf.python.framework.ops.disable_eager_execution()
-tf.config.run_functions_eagerly(True)
-
-# tf.config.threading.set_intra_op_parallelism_threads(1)
-# tf.config.threading.set_inter_op_parallelism_threads(100)
-
-# tf.device('CPU:0')
-
-
-print('Intra op threads: {}'.format(tf.config.threading.get_intra_op_parallelism_threads()))
-print('Inter op threads: {}'.format(tf.config.threading.get_inter_op_parallelism_threads()))
-
-if(tf.executing_eagerly()):
-    print('Eager execution is enabled (running operations immediately)\n')
-else:
-    print('Eager execution is off\n')
-
-print(('\nYour devices that are available:\n{0}').format(
-    [device.name for device in tf.config.experimental.list_physical_devices()]
-))
-
+# From: https://stackoverflow.com/questions/3173320/text-progress-bar-in-the-console
 def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r"):
     """
     Call in a loop to create terminal progress bar
@@ -49,11 +25,17 @@ def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, 
     if iteration == total: 
         print()
 
+@tf.function
+def knn(xj, data, k=18):
+    distances = tf.norm(data - xj, axis=1)
+    _, top_k_indices = tf.nn.top_k(tf.negative(distances), k=k)
+    return top_k_indices
+
 class DeepGAE(tf.Module):
-    def __init__(self, layers, n_classes, file_writer):
+    def __init__(self, file_writer):
         super(DeepGAE, self).__init__(name="DeepGAE")
-        self.layers = layers
-        self.n_classes = n_classes
+        self.layers = None
+        self.n_classes = None
         self.file_writer = file_writer
         self.parameter_list = None
         self.encoding_W = []
@@ -64,18 +46,12 @@ class DeepGAE(tf.Module):
         self.decoding_layers = []
         self.recalculate_reconstruction_sets = True
 
-        self.encoder = None
-        self.decoder = None
-        self.autoencoder = None
-
     @tf.function
     def predict(self, X, training=False):
-        # return self.autoencoder(X, training=training)
         return self.decode(self.encode(X))
 
     @tf.function
     def encode(self, X, training=False):
-        # return self.encoder(X, training=training)
         Y = X
         for layer in self.encoding_layers:
             Y = layer(Y)
@@ -83,7 +59,6 @@ class DeepGAE(tf.Module):
     
     @tf.function
     def decode(self, Y, training=False):
-        # return self.decoder(Y, training=training)
         X = Y
         for layer in self.decoding_layers:
             X = layer(X)
@@ -93,33 +68,18 @@ class DeepGAE(tf.Module):
     def __call__(self, X):
         return self.predict(X)
 
-    def compile(self, optimizer):
+    def compile(self, optimizer, layers, n_classes):
+        self.layers = layers
+        self.n_classes = n_classes
         self.optimizer = optimizer
         self.parameter_list = []
 
-        # layers_ = self.layers
-        # self.encoder = tf.keras.Sequential()
-        # self.encoder.add(tf.keras.Input(shape=(layers_[0], )))
-        # for i, n_units in enumerate(layers_[1:]):
-        #     self.encoder.add(layers.Dense(n_units, activation='sigmoid'))
-
-        # layers_ = self.layers[::-1]
-        # self.decoder = tf.keras.Sequential()
-        # self.decoder.add(tf.keras.Input(shape=(layers_[0], )))
-        # for i, n_units in enumerate(layers_[1:]):
-        #     self.decoder.add(layers.Dense(n_units, activation='sigmoid'))
-
-        # self.autoencoder = tf.keras.Sequential([self.encoder, self.decoder])
         initializer = tf.initializers.glorot_uniform()
         zero_init = tf.initializers.zeros()
         # Hidden layers:
         layers = self.layers[1:]
         last_layer_size = self.layers[0]
         for i, layer in enumerate(layers):
-            # self.encoding_W.append(tf.Variable(
-            #     tf.random.normal(shape=[last_layer_size, layer]), name='e-W%d' % i, trainable=True, dtype=tf.float32))
-            # self.encoding_b.append(tf.Variable(
-            #     tf.random.normal(shape=[layer]), name='e-b%d' % i, trainable=True))
             self.encoding_W.append(tf.Variable(
                 initializer(shape=[last_layer_size, layer]), name='e-W%d' % i, trainable=True, dtype=tf.float32))
             self.encoding_b.append(tf.Variable(
@@ -131,10 +91,6 @@ class DeepGAE(tf.Module):
 
         layers = self.layers[::-1][1:]
         for i, layer in enumerate(layers):
-            # self.decoding_W.append(tf.Variable(
-            #     tf.random.normal(shape=[last_layer_size, layer]), name='d-W%d' % i, trainable=True, dtype=tf.float32))
-            # self.decoding_b.append(tf.Variable(
-            #     tf.random.normal(shape=[layer]), name='d-b%d' % i, trainable=True))
             self.decoding_W.append(tf.Variable(
                 initializer(shape=[last_layer_size, layer]), name='d-W%d' % i, trainable=True, dtype=tf.float32))
             self.decoding_b.append(tf.Variable(
@@ -144,8 +100,6 @@ class DeepGAE(tf.Module):
             self.parameter_list.append(self.decoding_b[i])
             last_layer_size = layer
 
-        return
-
     # Eqn. 4
     @tf.function
     def loss(self, omega, S, X_pred):
@@ -153,34 +107,22 @@ class DeepGAE(tf.Module):
                     S * tf.square(tf.norm(
                         omega - tf.expand_dims(X_pred, axis=1), axis=2)))
 
-    @tf.function
-    def gradients(self, X, omega, S):
-        with tf.GradientTape() as tape:
-            X_pred = self.predict(X, training=True)
-            loss_value = self.loss(omega, S, X_pred)
-            # grads = tape.gradient(loss_value, self.parameter_list)
-            grads = tape.gradient(loss_value, self.parameter_list)
-            return loss_value, grads
-
     def preprocess(self, X, y, batch_size=64):
         y_ = tf.one_hot(y, depth=self.n_classes)
-        X_ = tf.data.Dataset.from_tensor_slices((X, y_)) \
+        return tf.data.Dataset.from_tensor_slices((X, y_)) \
             .shuffle(10000) \
             .batch(batch_size) \
             .map(lambda X_batch, y_batch: (X_batch, y_batch, None))
-            # .map(preprocess) \
-        return X_, y_
 
-    def recompute(self, X, y):
-        return X, y
+    def recompute(self, data):
+        return data
 
-    # @tf.function
-    def fit(self, X, y, epochs=10000, batch_size=64, initial_epoch=1, steps_per_epoch=None): 
+    def fit(self, X, y, epochs=10000, pretrain_epochs=1, batch_size=64, initial_epoch=1, steps_per_epoch=None): 
         # epoch = expected number of iterations until convergence
         with self.file_writer.as_default():
             # 1. Compute the reconstruction weights Si from {x_i} and
             #    determine the reconstruction set i, e.g. by k-nearest neighbor
-            X_, y_ = self.preprocess(X, y, batch_size)
+            data = self.preprocess(X, y, batch_size)
 
             for epoch in range(initial_epoch, epochs + 1):
                 # 2. Minimize E in Eqn.4 using the stochastic gradient 
@@ -190,19 +132,15 @@ class DeepGAE(tf.Module):
                 printProgressBar(0, num_steps_, 
                     prefix=f'Epochs {epoch}/{epochs}', suffix='', length=50)
 
-                for step, (X_batch, y_batch, encoded_batch) in enumerate(X_):
-                    # omega_batch = self.compute_reconstruction_set(encoded_batch, X_batch, y_batch)
-                    # S_batch = self.compute_reconstruction_weights(encoded_batch, X_batch, y_batch)
-                    omega_batch, S_batch = self.compute_reconstruction(encoded_batch, X_batch, y_batch)
+                for step, (X_batch, y_batch, encoded_batch) in enumerate(data):
+                    omega_batch, S_batch = self.compute_reconstruction(
+                        encoded_batch if epoch > pretrain_epochs else None, X_batch, y_batch)
                     
                     with tf.GradientTape() as tape:
                         X_pred = self.predict(X_batch, training=True)
-                        # X_pred = self.autoencoder(X_batch, training=True)
                         loss_value = self.loss(omega_batch, S_batch, X_pred)
                     grads = tape.gradient(loss_value, self.parameter_list)
                     self.optimizer.apply_gradients(zip(grads, self.parameter_list)) 
-                    # grads = tape.gradient(loss_value, self.autoencoder.trainable_variables)
-                    # self.optimizer.apply_gradients(zip(grads, self.autoencoder.trainable_variables)) 
 
                     printProgressBar(step + 1, num_steps_, 
                         prefix=f'Epochs {epoch}/{epochs}', 
@@ -211,18 +149,16 @@ class DeepGAE(tf.Module):
                     if steps_per_epoch is not None and step > steps_per_epoch:
                         break
 
-                # tf.print("Epoch: {}/{}, loss_value={}".format(epoch, epochs, loss_value))
                 tf.summary.scalar('loss', loss_value, step=epoch)
                 
                 # 3. Compute the hidden representation y_i, and update S_i and omega_i from y_i
                 if self.recalculate_reconstruction_sets:
-                    X_, y_ = self.recompute(X_, y_)
+                    data = self.recompute(data)
 
     @tf.function
     def get_class_label(self, y):
         return tf.argmax(y, axis=0)
 
-    # @tf.function
     def get_class_division(self, X, y, equal_sizes=True):
         if not equal_sizes:
             classes, sizes = [], []
@@ -243,15 +179,18 @@ class DeepGAE(tf.Module):
             sizes = [cl.shape[0] for cl in classes]
             return classes, sizes
 
+    def save(self, filepath):
+        tf.saved_model.save(self, filepath)
 
     def evaluate(self):
         pass
-
-
+    
+def load_model(filepath):
+    return tf.saved_model.load(filepath)
 
 class DeepPCA(DeepGAE):
-    def __init__(self, layers, n_classes, file_writer):
-        super(DeepPCA, self).__init__(layers, n_classes, file_writer)
+    def __init__(self, file_writer):
+        super(DeepPCA, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = False
 
     @tf.function
@@ -262,11 +201,9 @@ class DeepPCA(DeepGAE):
             fn_output_signature=tf.TensorSpec(shape=(1,)))
         return omega, S
 
-
-
 class DeepLDABalanced(DeepGAE):
-    def __init__(self, layers, n_classes, file_writer):
-        super(DeepLDABalanced, self).__init__(layers, n_classes, file_writer)
+    def __init__(self, file_writer):
+        super(DeepLDABalanced, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = False
         self.omega_classes = None
 
@@ -284,24 +221,22 @@ class DeepLDABalanced(DeepGAE):
             fn=lambda y: tf.convert_to_tensor([1. / self.omega_counts[0]]),
             elems=y_batch, 
             fn_output_signature=tf.TensorSpec(shape=(1,)))
-
         return omega, S
             
-
 class DeepLDA(DeepGAE):
-    def __init__(self, layers, n_classes, file_writer):
-        super(DeepLDA, self).__init__(layers, n_classes, file_writer)
+    def __init__(self, file_writer):
+        super(DeepLDA, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = False
         self.omega_classes = None
 
     def preprocess(self, X, y, batch_size):
-        X, y = super(DeepLDA, self).preprocess(X, y, batch_size)
-        self.omega_classes = self.get_class_division(X, y)
-        return X, y
+        data = super(DeepLDA, self).preprocess(X, y, batch_size)
+        self.omega_classes = self.get_class_division(data)
+        return data
 
-    def get_class_division(self, X, y):
+    def get_class_division(self, data):
         classes = [[] for i in range(self.n_classes)]
-        for X_batch, y_batch, encoded_batch in X:
+        for X_batch, y_batch, encoded_batch in data:
             for i, x in enumerate(X_batch):
                 class_label = self.get_class_label(y_batch[i])
                 classes[class_label].append(x)
@@ -339,17 +274,9 @@ class DeepLDA(DeepGAE):
 
         return omega, S
 
-
-
-def knn(xj, data, k=18):
-    distances = tf.norm(data - xj, axis=1)
-    _, top_k_indices = tf.nn.top_k(tf.negative(distances), k=k)
-    # return tf.gather(data, top_k_indices)
-    return top_k_indices
-
 class DeepLE(DeepGAE):
-    def __init__(self, layers, n_classes, file_writer, k=10):
-        super(DeepLE, self).__init__(layers, n_classes, file_writer)
+    def __init__(self, file_writer, k=10):
+        super(DeepLE, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = True
         self.k = k
         self.t = 1.
@@ -360,38 +287,35 @@ class DeepLE(DeepGAE):
         self.data = tf.convert_to_tensor(X)
         return super(DeepLE, self).preprocess(X, y, batch_size)
 
-    def recompute(self, X, y):
-        X = X.map(lambda X_batch, y_batch, encoded_batch: (X_batch, y_batch, self.encode(X_batch)))
+    def recompute(self, data):
+        data = data.map(lambda X_batch, y_batch, encoded_batch: (X_batch, y_batch, self.encode(X_batch)))
         self.data_encoded = self.encode(self.data)
-        return X, y
+        return data
 
     @tf.function
     def compute_reconstruction(self, encoded_batch, X_batch, y_batch):
         X_batch_ = X_batch if encoded_batch is None else encoded_batch
         data_ = self.data if encoded_batch is None else self.data_encoded
-
         omega = tf.map_fn(
             fn=lambda x: tf.gather(self.data, knn(x, data_, k=self.k)),
             elems=X_batch_, 
             fn_output_signature=tf.TensorSpec(shape=(self.k, X_batch.shape[1])))
-
         S = tf.exp(tf.negative(
                 tf.square(tf.norm(
                     tf.expand_dims(X_batch, axis=1) - omega, axis=2))) / self.t)
-
         return omega, S
 
 
 class DeepMFA(DeepGAE):
-    def __init__(self, layers, n_classes, file_writer, k=18):
-        super(DeepMFA, self).__init__(layers, n_classes, file_writer)
+    def __init__(self, file_writer, k=18):
+        super(DeepMFA, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = True
         self.omega_classes = None
         self.k = k
 
-    def get_encoded_class_division(self, X, y):
+    def get_encoded_class_division(self, data):
         classes = [[] for i in range(self.n_classes)]
-        for X_batch, y_batch, encoded_batch in X:
+        for X_batch, y_batch, encoded_batch in data:
             for i, x in enumerate(encoded_batch):
                 class_label = self.get_class_label(y_batch[i])
                 classes[class_label].append(x)
@@ -415,7 +339,6 @@ class DeepMFA(DeepGAE):
 
         return X, y
 
-
     def recompute(self, X, y):
         X = X.map(lambda X_batch, y_batch, encoded_batch: (X_batch, y_batch, self.encode(X_batch)))
 
@@ -428,14 +351,6 @@ class DeepMFA(DeepGAE):
                 tf.concat(self.omega_encoded_classes[class_inx].tolist(), axis=0).to_tensor())
 
         return X, y
-
-    
-    def knn(self, xj, data):
-        distances = tf.norm(data - xj, axis=1)
-        _, top_k_indices = tf.nn.top_k(tf.negative(distances), k=self.k)
-        # return tf.gather(data, top_k_indices)
-        return top_k_indices
-        
     
     def compute_reconstruction_set(self, encoded_batch, X_batch, y_batch):
         X_batch_ = X_batch
@@ -448,8 +363,8 @@ class DeepMFA(DeepGAE):
 
         def mappingFunc(i):
             Ci = self.get_class_label(y_batch[i.numpy()])
-            omega_k1_inx = self.knn(X_batch_[i], omega_classes_[Ci].to_tensor())
-            omega_k2_inx = self.knn(X_batch_[i], omega_classes_complement_[Ci])
+            omega_k1_inx = knn(X_batch_[i], omega_classes_[Ci].to_tensor())
+            omega_k2_inx = knn(X_batch_[i], omega_classes_complement_[Ci])
             return tf.concat([
                 tf.gather(self.omega_classes[Ci].to_tensor(), omega_k1_inx), 
                 tf.gather(self.omega_classes_complement[Ci], omega_k2_inx)], axis=0)
@@ -468,124 +383,16 @@ class DeepMFA(DeepGAE):
             elems=tf.range(X_batch.shape[0]), 
             fn_output_signature=tf.TensorSpec(shape=(2*self.k,)))
 
-def save_model(model, filepath):
-    tf.saved_model.save(model, filepath)
-
-def load_model(filepath):
-    return tf.saved_model.load(filepath)
-
-def preprocess(x, y):
-    x = tf.cast(x, tf.float32) / 255.0
-    x = tf.reshape(x, [28*28])
-    y = tf.cast(y, tf.int32)
-    return x, y
-
-def postprocess(X, image_shape=(28, 28)):
-    return tf.reshape(X, image_shape) * 255
-
-def _dataset(X, y, batch_size=64):
-    y = tf.one_hot(y, depth=10)
-    X = tf.data.Dataset.from_tensor_slices((X, y)) \
-        .map(preprocess) \
-        .shuffle(1000) \
-        .batch(batch_size)
-    return X, y
-
-@tf.function
-def dataset(batch_size, limit_train_samples=0):
-    (X_train, y_train), (X_test, y_test) = datasets.mnist.load_data()
-    if limit_train_samples > 0:
-        X_train = X_train[:limit_train_samples]
-        y_train = y_train[:limit_train_samples]
-
-    X_train, y_train = _dataset(X_train, y_train, batch_size)
-    X_test, y_test = _dataset(X_test, y_test, batch_size)
-    return (X_train, y_train), (X_test, y_test)
-
-
-def main(argc, argv):
-    n_epochs = 40
-    n_classes = 10
-    batch_size = 64
-    n_samples = 10000 # reduce dataset
-    learning_rate = 0.001
-    momentum = 0.9
-    load_existing_model = False
-    save_path = '.model'
-    
-    # (X_train, y_train), (X_test, y_test) = dataset(batch_size, n_samples)
-    # Download data:
-    (X_train, y_train), (X_test, y_test) = datasets.mnist.load_data()
-    if n_samples > 0:
-        X_train = X_train[:n_samples]
-        y_train = y_train[:n_samples]
-        X_test = X_test[:n_samples]
-        y_test = y_test[:n_samples]
-
-    # Normalize and reshape:
-    image_shape = X_train[0].shape
-    X_train = (X_train.astype(np.float32) / 255.0).reshape((X_train.shape[0], image_shape[0] * image_shape[1]))
-    X_test = (X_train.astype(np.float32) / 255.0).reshape((X_train.shape[0], image_shape[0] * image_shape[1]))
-
-
+def factory(model_name):
     logdir = os.path.join("logs", datetime.now().strftime("%Y%m%d-%H%M%S"))
     file_writer = tf.summary.create_file_writer(logdir)
-    # with file_writer.as_default():
-    #     images = np.reshape(X_train[0:25], (-1, 28, 28, 1))
-    #     tf.summary.image("Training data", images, max_outputs=25)
-
-    # 1. Make all methods (PCA, LDA, MFA) valid for network [input_size, 200, 100],
-    # 2. Figure out and implement error rate for each method for comparison (Table 2, Table 3), (K)
-    # 4. Visulize 2d (TT)
-    # 5. Try to make CPU utilization better, (B)
-    # 6. Make all methods (PCA, LDA, MFA) valid for network [input_size, 1000, 500, 250, 2]
-    # 7. What hyperparameters should we chose for training? How to find them (considering slow training)? (batch_size, learning_rate, momentum, optimizer type, etc.)
-    # 8. What about overfitting? How can we detect it?
-
-    
-    input_size = image_shape[0] * image_shape[1]
-    
-    if os.path.exists(save_path) and load_existing_model:
-        print("Loading existing model...")
-        model = load_model(save_path)
-        
-    else:
-        print("Training new model...")
-        
-        model = DeepLDA([input_size, 200, 100], n_classes, file_writer)
-        # Note! We use keras optimizer.
-        # TODO: try with momentum..
-        # learning_rate=0.01, momentum=0.9
-        model.compile(optimizers.SGD(learning_rate=learning_rate, momentum=momentum))
-        model.fit(X_train, y_train, epochs=n_epochs, steps_per_epoch=None)
-        print("Saving model...")
-        # return 0
-        save_model(model, save_path)
-
-    # Reconstruct test samples using model:
-    Xr = _dataset(X_test, y_test, batch_size)[0].unbatch() \
-        .map(lambda X, y: (postprocess(X, image_shape), X)) \
-        .batch(batch_size) \
-        .map(lambda Xp, X: (Xp, model.predict(X), model.encode(X))) \
-        .unbatch() \
-        .map(lambda Xp, X, Xen: (Xp, postprocess(X), postprocess(Xen, (10, 10)))) \
-        .take(27)
-
-    # Visualize reconstructed images:
-    fig, axs = plt.subplots(9, 9, figsize=(10, 10))
-    axs_ = axs.ravel()
-    for i, (img_org, img_pred, img_encoded) in enumerate(Xr):
-        axs_[i * 3].axis('off')
-        axs_[i * 3 + 1].axis('off')
-        axs_[i * 3 + 2].axis('off')
-        axs_[i * 3].imshow(img_pred, cmap='gray')
-        axs_[i * 3 + 1].imshow(img_org, cmap='gray')
-        axs_[i * 3 + 2].imshow(img_encoded, cmap='gray')
-
-    plt.show()
-
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(len(sys.argv), sys.argv))
+    if model_name == "PCA":
+        return DeepPCA(file_writer)
+    elif model_name == "LDABalanced":
+        return DeepLDABalanced(file_writer)
+    elif model_name == "LDA":
+        return DeepLDA(file_writer)
+    elif model_name == "MFA":
+        return DeepMFA(file_writer)
+    elif model_name == "LE":
+        return DeepLE(file_writer)

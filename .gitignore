@@ -4,3 +4,4 @@ logs/*
 /.weight/pca.h5
 /img/dgae_pca.png
 /env/
+**/__pycache__/*
