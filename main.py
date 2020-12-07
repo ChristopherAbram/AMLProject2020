@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import functools as ft
 
 # tf.python.framework.ops.disable_eager_execution()
-tf.config.run_functions_eagerly(True)
+tf.config.run_functions_eagerly(False)
 
 # tf.config.threading.set_intra_op_parallelism_threads(1)
 # tf.config.threading.set_inter_op_parallelism_threads(100)
@@ -175,7 +175,7 @@ class DeepGAE(tf.Module):
         return X, y
 
     # @tf.function
-    def fit(self, X, y, epochs=10000, batch_size=64, initial_epoch=1, steps_per_epoch=None): 
+    def fit(self, X, y, epochs=10000, pretrain_epochs=1, batch_size=64, initial_epoch=1, steps_per_epoch=None): 
         # epoch = expected number of iterations until convergence
         with self.file_writer.as_default():
             # 1. Compute the reconstruction weights Si from {x_i} and
@@ -193,7 +193,8 @@ class DeepGAE(tf.Module):
                 for step, (X_batch, y_batch, encoded_batch) in enumerate(X_):
                     # omega_batch = self.compute_reconstruction_set(encoded_batch, X_batch, y_batch)
                     # S_batch = self.compute_reconstruction_weights(encoded_batch, X_batch, y_batch)
-                    omega_batch, S_batch = self.compute_reconstruction(encoded_batch, X_batch, y_batch)
+                    omega_batch, S_batch = self.compute_reconstruction(
+                        encoded_batch if epoch > pretrain_epochs else None, X_batch, y_batch)
                     
                     with tf.GradientTape() as tape:
                         X_pred = self.predict(X_batch, training=True)
@@ -340,11 +341,10 @@ class DeepLDA(DeepGAE):
         return omega, S
 
 
-
+@tf.function
 def knn(xj, data, k=18):
     distances = tf.norm(data - xj, axis=1)
     _, top_k_indices = tf.nn.top_k(tf.negative(distances), k=k)
-    # return tf.gather(data, top_k_indices)
     return top_k_indices
 
 class DeepLE(DeepGAE):
@@ -369,16 +369,13 @@ class DeepLE(DeepGAE):
     def compute_reconstruction(self, encoded_batch, X_batch, y_batch):
         X_batch_ = X_batch if encoded_batch is None else encoded_batch
         data_ = self.data if encoded_batch is None else self.data_encoded
-
         omega = tf.map_fn(
             fn=lambda x: tf.gather(self.data, knn(x, data_, k=self.k)),
             elems=X_batch_, 
             fn_output_signature=tf.TensorSpec(shape=(self.k, X_batch.shape[1])))
-
         S = tf.exp(tf.negative(
                 tf.square(tf.norm(
                     tf.expand_dims(X_batch, axis=1) - omega, axis=2))) / self.t)
-
         return omega, S
 
 
@@ -507,13 +504,13 @@ def main(argc, argv):
     n_epochs = 40
     n_classes = 10
     batch_size = 64
-    n_samples = 10000 # reduce dataset
+    n_samples = 5000 # reduce dataset
+    pretrain_epoch_ratio = 0.5
     learning_rate = 0.001
     momentum = 0.9
     load_existing_model = False
     save_path = '.model'
     
-    # (X_train, y_train), (X_test, y_test) = dataset(batch_size, n_samples)
     # Download data:
     (X_train, y_train), (X_test, y_test) = datasets.mnist.load_data()
     if n_samples > 0:
@@ -552,12 +549,17 @@ def main(argc, argv):
     else:
         print("Training new model...")
         
-        model = DeepLDA([input_size, 200, 100], n_classes, file_writer)
+        model = DeepLE([input_size, 200, 100], n_classes, file_writer)
         # Note! We use keras optimizer.
         # TODO: try with momentum..
         # learning_rate=0.01, momentum=0.9
         model.compile(optimizers.SGD(learning_rate=learning_rate, momentum=momentum))
-        model.fit(X_train, y_train, epochs=n_epochs, steps_per_epoch=None)
+        model.fit(
+            X_train, y_train, 
+            epochs=n_epochs, 
+            pretrain_epochs=int(pretrain_epoch_ratio * n_epochs), 
+            steps_per_epoch=None)
+        
         print("Saving model...")
         # return 0
         save_model(model, save_path)
