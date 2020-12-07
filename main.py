@@ -58,7 +58,7 @@ def main(argc, argv):
     input_size = image_shape[0] * image_shape[1]
     n_classes = 10
     batch_size = 64
-    n_samples = 1000
+    n_samples = 7000
     pretrain_epoch_ratio = 0.0
     validation_ratio = 0.2
     # How often run validation in model.fit(), e.g. 2 means run evaluate every 2 epochs:

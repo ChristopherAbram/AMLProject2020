@@ -6,7 +6,7 @@ from datetime import datetime
 from autoencoder.validation import error_rate_impurity, tf_error_rate_impurity
 
 # From: https://stackoverflow.com/questions/3173320/text-progress-bar-in-the-console
-def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r"):
+def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r", end=True):
     """
     Call in a loop to create terminal progress bar
     @params:
@@ -24,7 +24,7 @@ def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, 
     bar = fill * filledLength + '-' * (length - filledLength)
     print(f'\r{prefix} |{bar}| {iteration}/{total} {suffix}', end = printEnd)
     # Print New Line on Complete
-    if iteration == total: 
+    if iteration == total and end: 
         print()
 
 @tf.function
@@ -154,18 +154,23 @@ class DeepGAE(tf.Module):
 
                     printProgressBar(step + 1, num_steps_, 
                         prefix=f'Epochs {epoch}/{epochs}', 
-                        suffix=f'loss= {loss_value.numpy()}', length=50)
+                        suffix='loss= {:.5f}'.format(loss_value.numpy()), length=50, end=True)
 
                     if steps_per_epoch is not None and step > steps_per_epoch:
                         break
 
                 # Compute metrics and insert to the log:
-                if validation_data is not None and validation_freq > 0 and epoch % validation_freq == 0:
+                if validation_data is not None and validation_freq > 0 and (epoch % validation_freq == 0 or epoch == 1):
                     error_rate, impurity = self.evaluate(validation_data[0], validation_data[1])
                     history['error_rate'].append([epoch, error_rate])
                     history['impurity'].append([epoch, impurity])
                     tf.summary.scalar('error_rate', loss_value, step=epoch)
                     tf.summary.scalar('impurity', loss_value, step=epoch)
+
+                    printProgressBar(step + 1, num_steps_, 
+                        prefix=f'Epochs {epoch}/{epochs}', 
+                        suffix='loss= {:.5f}, error_rate= {:.2f}, impurity= {:.3f}'.format(
+                            loss_value.numpy(), error_rate, impurity), length=50)
 
                 history['loss'].append([epoch, loss_value.numpy()])
                 tf.summary.scalar('loss', loss_value, step=epoch)
