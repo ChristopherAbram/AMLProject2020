@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 import matplotlib.pyplot as plt
 import math
 import autoencoder.nn as ann
@@ -29,6 +30,27 @@ def error_rate_impurity(X_valid_encoded, X_valid, y_valid, k=18):
     error_rate = errors * 100. / X_valid.shape[0]
     impurity = impurities / (X_valid.shape[0] * k)
     return error_rate, impurity
+
+@tf.function
+def votes_and_error(x, X_encoded, y, k=18):
+    label = tf.cast(x[-1], tf.int32)
+    k_labels = tf.gather(tf.cast(y, tf.int32), ann.knn(x[:-1], X_encoded[:-1], k))
+    votes_against = tf.reduce_sum(tf.cast(k_labels!=label, tf.int32))
+    errors = tf.cast(votes_against > tf.cast(tf.math.ceil(k / 2.), tf.int32), tf.int32)
+    return tf.stack([votes_against, errors])
+
+@tf.function
+def tf_error_rate_impurity(X_encoded, X, y, k=18):
+    err_impr_ = tf.map_fn(
+        fn=lambda x: votes_and_error(x, X_encoded, y, k),
+        elems=tf.concat(
+            [X_encoded, tf.expand_dims(tf.cast(y, X_encoded.dtype), axis=1)], axis=1
+        ),
+        fn_output_signature=tf.TensorSpec(shape=(2, ), dtype=tf.int32))
+    acc_err_impr_ = tf.reduce_mean(tf.cast(err_impr_, tf.float32), axis=0)
+    impr_ = acc_err_impr_[0] / tf.cast(k, tf.float32)
+    errr_ = acc_err_impr_[1] * 100.
+    return errr_, impr_
 
 # 2D GRAPH
 def scatter_plot_2d(filepath, X_valid_encoded, X_valid, y_valid, n_classes):
@@ -72,4 +94,16 @@ def plot_table(filepath, X_valid, X_valid_predicted, X_valid_encoded,
         axs_[i * 3 + 1].imshow(img_pred, cmap='gray')
         axs_[i * 3 + 2].imshow(img_encoded, cmap='gray')
     plt.savefig(filepath + "/img/predict.png")
+
+def plot_history(history, metric_name, filepath=None):
+    values = np.array(history[metric_name])
+    if len(values) > 0:
+        fig_, ax = plt.subplots()
+        ax.plot(values[:,0], values[:,1])
+        plt.xlabel('epochs')
+        plt.ylabel(metric_name)
+        if filepath is not None:
+            plt.savefig(filepath)
+        else:
+            plt.show()
 

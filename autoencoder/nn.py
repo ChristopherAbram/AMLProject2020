@@ -3,6 +3,8 @@ import tensorflow as tf
 import os
 from datetime import datetime
 
+from autoencoder.validation import error_rate_impurity, tf_error_rate_impurity
+
 # From: https://stackoverflow.com/questions/3173320/text-progress-bar-in-the-console
 def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r"):
     """
@@ -117,12 +119,20 @@ class DeepGAE(tf.Module):
     def recompute(self, data):
         return data
 
-    def fit(self, X, y, epochs=10000, pretrain_epochs=1, batch_size=64, initial_epoch=1, steps_per_epoch=None): 
+    def fit(self, X, y, epochs=10000, 
+            pretrain_epochs=1, 
+            batch_size=64, 
+            initial_epoch=1, 
+            steps_per_epoch=None, 
+            validation_data=None, 
+            validation_freq=1): 
+
         # epoch = expected number of iterations until convergence
         with self.file_writer.as_default():
             # 1. Compute the reconstruction weights Si from {x_i} and
             #    determine the reconstruction set i, e.g. by k-nearest neighbor
             data = self.preprocess(X, y, batch_size)
+            history = { 'loss': [], 'error_rate': [], 'impurity': [] }
 
             for epoch in range(initial_epoch, epochs + 1):
                 # 2. Minimize E in Eqn.4 using the stochastic gradient 
@@ -149,11 +159,22 @@ class DeepGAE(tf.Module):
                     if steps_per_epoch is not None and step > steps_per_epoch:
                         break
 
+                # Compute metrics and insert to the log:
+                if validation_data is not None and validation_freq > 0 and epoch % validation_freq == 0:
+                    error_rate, impurity = self.evaluate(validation_data[0], validation_data[1])
+                    history['error_rate'].append([epoch, error_rate])
+                    history['impurity'].append([epoch, impurity])
+                    tf.summary.scalar('error_rate', loss_value, step=epoch)
+                    tf.summary.scalar('impurity', loss_value, step=epoch)
+
+                history['loss'].append([epoch, loss_value.numpy()])
                 tf.summary.scalar('loss', loss_value, step=epoch)
                 
                 # 3. Compute the hidden representation y_i, and update S_i and omega_i from y_i
                 if self.recalculate_reconstruction_sets:
                     data = self.recompute(data)
+
+        return history
 
     @tf.function
     def get_class_label(self, y):
@@ -182,8 +203,11 @@ class DeepGAE(tf.Module):
     def save(self, filepath):
         tf.saved_model.save(self, filepath)
 
-    def evaluate(self):
-        pass
+    # @tf.function
+    def evaluate(self, X, y):
+        error_rate, impurity = tf_error_rate_impurity(self.encode(X), X, y, 18)
+        return error_rate.numpy(), impurity.numpy()
+        # return error_rate_impurity(self.encode(X), X, y, 18)
     
 def load_model(filepath):
     return tf.saved_model.load(filepath)

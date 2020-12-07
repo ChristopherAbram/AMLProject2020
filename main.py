@@ -4,6 +4,7 @@ import sys, os, math
 import tensorflow as tf
 from tensorflow.keras import datasets, optimizers
 import math
+import itertools as it
 
 # tf.python.framework.ops.disable_eager_execution()
 tf.config.run_functions_eagerly(False)
@@ -51,80 +52,100 @@ def dataset(num_sets = 30, validation_ratio = 0.2):
 
 
 def main(argc, argv):
+    # Constant huperparametrs:
     image_shape = (28, 28)
     load_existing_model = False
     input_size = image_shape[0] * image_shape[1]
     n_classes = 10
     batch_size = 64
-    n_samples = 2000
+    n_samples = 1000
+    pretrain_epoch_ratio = 0.0
+    validation_ratio = 0.2
+    # How often run validation in model.fit(), e.g. 2 means run evaluate every 2 epochs:
+    validation_freq = 1
+    # To disable validation in model.fit(), pass None as validation_data
+    # In our case set run_validation_per_epoch to False if you don't need to evaluate during training
+    run_validation_per_epoch = True # used only in main loop
 
-    epochs = [10]
-    layers_configs = [[input_size, 200, 100, 2]]
+    # Lists of hyperparametrs:
+    epochs = [100]
+    layers_configs = [[input_size, 200, 100]]
     learning_rates = [0.001]
     momentums = [0.5]
     model_names = ['PCA']
-    pretrain_epoch_ratio = 0.0
+
+    # Create all compination of hyperparametr lists:
+    configs = it.product(model_names, epochs, layers_configs, learning_rates, momentums)
+
+    # with tf.device('CPU:0'):
+    train_valid_set, test_set = dataset(MNIST_size // n_samples, validation_ratio)
+    for i, (model_name, n_epochs, layers, learning_rate, momentum) in enumerate(configs):
+        layer_string = '-'.join(str(x) for x in layers)
+        print("########################################################")
+        print("Validating config: %s model - %d epochs - %d samples - %s layers - %f learning rate - %f momentum - %d batch size" % 
+            (model_name, n_epochs, n_samples, layer_string, learning_rate, momentum, batch_size))
+        (X_train, y_train), (X_valid, y_valid) = train_valid_set[i]
+
+        save_path = ".models/" + "_".join(
+            (model_name, str(n_epochs), str(batch_size), str(n_samples), 
+                str(layer_string), str(learning_rate), str(momentum)))
+
+        if os.path.exists(save_path) and load_existing_model:
+            print("Loading existing model...")
+            model = load_model(save_path)
+            
+        else:
+            print("Training new model...")
+            
+            model = factory(model_name)
+            # Note! We use keras optimizer.
+            model.compile(optimizers.SGD(learning_rate=learning_rate, momentum=momentum), layers, n_classes)
+
+            validation_data = (X_valid, y_valid) if run_validation_per_epoch else None
+            history = model.fit(X_train, y_train, 
+                epochs=n_epochs, 
+                pretrain_epochs=(pretrain_epoch_ratio * n_epochs),
+                validation_freq=validation_freq,
+                validation_data=validation_data)
+            
     
-    train_valid_set, test_set = dataset(MNIST_size // n_samples)
+            print("Saving model...")        
+            model.save(save_path)
 
-    with tf.device('CPU:0'):
-        i = 0
-        for n_epochs in epochs:
-            for layers in layers_configs:
-                for learning_rate in learning_rates:
-                    for momentum in momentums:
-                        for model_name in model_names:
-                            layer_string = '-'.join(str(x) for x in layers)
-                            print("########################################################")
-                            print("Validating config: %s model - %d epochs - %d samples - %s layers - %f learning rate - %f momentum - %d batch size" % (model_name, n_epochs, n_samples, layer_string, learning_rate, momentum, batch_size))
-                            (X_train,y_train),(X_valid,y_valid) = train_valid_set[i]
+            if not os.path.exists(save_path + "/img"):
+                os.mkdir(save_path + "/img")
 
-                            save_path = ".models/" + "_".join((model_name,str(n_epochs),str(batch_size),str(n_samples),str(layer_string),str(learning_rate),str(momentum)))
+            # Plot loss function and other metrics:
+            plot_history(history, 'loss', filepath=os.path.join(save_path, 'img', 'loss.png'))
+            if run_validation_per_epoch:
+                plot_history(history, 'error_rate', filepath=os.path.join(save_path, 'img', 'error_rate.png'))
+                plot_history(history, 'impurity', filepath=os.path.join(save_path, 'img', 'impurity.png'))
 
-                            if os.path.exists(save_path) and load_existing_model:
-                                print("Loading existing model...")
-                                model = load_model(save_path)
-                                
-                            else:
-                                print("Training new model...")
-                                
-                                model = factory(model_name)
-                                # Note! We use keras optimizer.
-                                model.compile(optimizers.SGD(learning_rate=learning_rate, momentum=momentum), layers, n_classes)
-                                model.fit(X_train, y_train, 
-                                    epochs=n_epochs, 
-                                    pretrain_epochs=(pretrain_epoch_ratio * n_epochs))
-                                print("Saving model...")
-                                
-                                model.save(save_path)
-                                if not os.path.exists(save_path + "/img"):
-                                    os.mkdir(save_path + "/img")
+        error_rate, impurity = model.evaluate(X_valid, y_valid)
+        print("ERROR RATE: %f%%" % error_rate)
+        print("AVG. IMPURITY: %f" % impurity)
+        info_file = open(save_path+"/info.txt","w+")
+        info_file.write("ERROR RATE: %f%%" % error_rate)
+        info_file.write("AVG. IMPURITY: %f" % impurity)
+        info_file.close()
 
-                            X_valid_encoded = model.encode(X_valid)
-                            X_valid_predicted = model.predict(X_valid)
 
-                            error_rate, impurity = error_rate_impurity(X_valid_encoded, X_valid, y_valid, k=18)
-                            print("ERROR RATE: %f%%" % error_rate)
-                            print("AVG. IMPURITY: %f" % impurity)
-                            info_file = open(save_path+"/info.txt","w+")
-                            info_file.write("ERROR RATE: %f%%" % error_rate)
-                            info_file.write("AVG. IMPURITY: %f" % impurity)
-                            info_file.close()
+        X_valid_encoded = model.encode(X_valid)
+        X_valid_predicted = model.predict(X_valid)
+        width, height = encoded_display_shape(layers[len(layers) - 1])
 
-                            width, height = encoded_display_shape(layers[len(layers) - 1])
+        # 2D GRAPH
+        if width == 2:
+            scatter_plot_2d(save_path, X_valid_encoded, X_valid, y_valid, n_classes)
 
-                            # 2D GRAPH
-                            if width == 2:
-                                scatter_plot_2d(save_path, X_valid_encoded, X_valid, y_valid, n_classes)
+        # Visualize reconstructed images:
+        plot_col, plot_row = 3, 9
+        X_valid = X_valid[:plot_col * plot_row]
+        X_valid_encoded = X_valid_encoded[:plot_col * plot_row]
+        X_valid_predicted = X_valid_predicted[:plot_col * plot_row]
 
-                            # Visualize reconstructed images:
-                            plot_col, plot_row = 3, 9
-                            X_valid = X_valid[:plot_col * plot_row]
-                            X_valid_encoded = X_valid_encoded[:plot_col * plot_row]
-                            X_valid_predicted = X_valid_predicted[:plot_col * plot_row]
-
-                            plot_table(save_path, X_valid, X_valid_predicted, X_valid_encoded, 
-                                image_shape, (width, height), (plot_row, plot_col))
+        plot_table(save_path, X_valid, X_valid_predicted, X_valid_encoded, 
+            image_shape, (width, height), (plot_row, plot_col))
 
     return 0
 
