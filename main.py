@@ -72,7 +72,7 @@ def main(argc, argv):
     layers_configs = [[input_size, 200, 100]]
     learning_rates = [0.001]
     momentums = [0.5]
-    model_names = ['LE']
+    model_names = ['BalancedLDA']
 
     # Create all compination of hyperparametr lists:
     configs = it.product(model_names, epochs, layers_configs, learning_rates, momentums)

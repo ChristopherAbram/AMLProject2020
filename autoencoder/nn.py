@@ -265,15 +265,15 @@ class DeepPCA(DeepGAE):
             fn_output_signature=tf.TensorSpec(shape=(1,)))
         return omega, S
 
-class DeepLDABalanced(DeepGAE):
+class DeepBalancedLDA(DeepGAE):
     def __init__(self, file_writer):
-        super(DeepLDABalanced, self).__init__(file_writer)
+        super(DeepBalancedLDA, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = False
         self.omega_classes = None
 
     def preprocess(self, X, y, batch_size=64):
         self.omega_classes, self.omega_counts = self.get_class_division(X, y)
-        return super(DeepLDABalanced, self).preprocess(X, y, batch_size)
+        return super(DeepBalancedLDA, self).preprocess(X, y, batch_size)
     
     @tf.function
     def compute_reconstruction(self, encoded_batch, X_batch, y_batch):
@@ -453,8 +453,8 @@ def factory(model_name):
     file_writer = tf.summary.create_file_writer(logdir)
     if model_name == "PCA":
         return DeepPCA(file_writer)
-    elif model_name == "LDABalanced":
-        return DeepLDABalanced(file_writer)
+    elif model_name == "BalancedLDA":
+        return DeepBalancedLDA(file_writer)
     elif model_name == "LDA":
         return DeepLDA(file_writer)
     elif model_name == "MFA":
