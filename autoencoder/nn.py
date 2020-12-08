@@ -116,6 +116,12 @@ class DeepGAE(tf.Module):
             .batch(batch_size) \
             .map(lambda X_batch, y_batch: (X_batch, y_batch, None))
 
+    def preprocess_validation_data(self, X, y, batch_size=64):
+        y_ = tf.one_hot(y, depth=self.n_classes)
+        return tf.data.Dataset.from_tensor_slices((X, y_)) \
+            .shuffle(10000) \
+            .batch(batch_size)
+
     def recompute(self, data):
         return data
 
@@ -131,18 +137,27 @@ class DeepGAE(tf.Module):
         with self.file_writer.as_default():
             # 1. Compute the reconstruction weights Si from {x_i} and
             #    determine the reconstruction set i, e.g. by k-nearest neighbor
-            data = self.preprocess(X, y, batch_size)
-            history = { 'loss': [], 'error_rate': [], 'impurity': [] }
+            data_ = self.preprocess(X, y, batch_size)
+            validation_data_ = self.preprocess_validation_data(validation_data[0], validation_data[1], batch_size) \
+                if validation_data != None else None
+
+            history = { 'loss': [], 'val_loss': [], 'error_rate': [], 'impurity': [] }
 
             for epoch in range(initial_epoch, epochs + 1):
                 # 2. Minimize E in Eqn.4 using the stochastic gradient 
                 #    descent and update theta for t steps.
-                loss_value = 0.
+                total_training_loss = 0.
+                avg_training_loss = 0.
+                total_validation_loss = 0.
+                avg_validation_loss = 0.
+
+                # Display a progress bar
                 num_steps_ = X.shape[0] // batch_size
                 printProgressBar(0, num_steps_, 
                     prefix=f'Epochs {epoch}/{epochs}', suffix='', length=50)
 
-                for step, (X_batch, y_batch, encoded_batch) in enumerate(data):
+                # Training loop
+                for train_step, (X_batch, y_batch, encoded_batch) in enumerate(data_):
                     omega_batch, S_batch = self.compute_reconstruction(
                         encoded_batch if epoch > pretrain_epochs else None, X_batch, y_batch)
                     
@@ -150,34 +165,54 @@ class DeepGAE(tf.Module):
                         X_pred = self.predict(X_batch, training=True)
                         loss_value = self.loss(omega_batch, S_batch, X_pred)
                     grads = tape.gradient(loss_value, self.parameter_list)
-                    self.optimizer.apply_gradients(zip(grads, self.parameter_list)) 
+                    self.optimizer.apply_gradients(zip(grads, self.parameter_list))
 
-                    printProgressBar(step + 1, num_steps_, 
+                    total_training_loss += loss_value
+                    avg_training_loss = total_training_loss / (train_step + 1)
+
+                    printProgressBar(train_step + 1, num_steps_, 
                         prefix=f'Epochs {epoch}/{epochs}', 
-                        suffix='loss= {:.5f}'.format(loss_value.numpy()), length=50, end=True)
+                        suffix='loss= {:.4f}'.format(avg_training_loss.numpy()), length=50, end=False)
 
-                    if steps_per_epoch is not None and step > steps_per_epoch:
-                        break
+                # Validation loop
+                if validation_data_ is not None:
+                    for val_step, (X_batch, y_batch) in enumerate(validation_data_):
+                        encoded_batch = self.encode(X_batch)
+                        omega_batch, S_batch = self.compute_reconstruction(
+                            encoded_batch, X_batch, y_batch)
+                        
+                        X_pred = self.decode(encoded_batch)
+                        loss_value = self.loss(omega_batch, S_batch, X_pred)
+                        total_validation_loss += loss_value
+                        avg_validation_loss = total_validation_loss / (val_step + 1)
 
-                # Compute metrics and insert to the log:
-                if validation_data is not None and validation_freq > 0 and (epoch % validation_freq == 0 or epoch == 1):
-                    error_rate, impurity = self.evaluate(validation_data[0], validation_data[1])
-                    history['error_rate'].append([epoch, error_rate])
-                    history['impurity'].append([epoch, impurity])
-                    tf.summary.scalar('error_rate', loss_value, step=epoch)
-                    tf.summary.scalar('impurity', loss_value, step=epoch)
+                    # Compute metrics and insert to the log:
+                    if validation_freq > 0 and (epoch % validation_freq == 0 or epoch == 1):
+                        error_rate, impurity = self.evaluate(validation_data[0], validation_data[1])
+                        history['error_rate'].append([epoch, error_rate])
+                        history['impurity'].append([epoch, impurity])
+                        tf.summary.scalar('error_rate', error_rate, step=epoch)
+                        tf.summary.scalar('impurity', impurity, step=epoch)
 
-                    printProgressBar(step + 1, num_steps_, 
-                        prefix=f'Epochs {epoch}/{epochs}', 
-                        suffix='loss= {:.5f}, error_rate= {:.2f}, impurity= {:.3f}'.format(
-                            loss_value.numpy(), error_rate, impurity), length=50)
+                        printProgressBar(train_step + 1, num_steps_, 
+                            prefix=f'Epochs {epoch}/{epochs}', 
+                            suffix='loss= {:.4f}, val_loss= {:.4f}, error_rate= {:.2f}, impurity= {:.3f}'.format(
+                                avg_training_loss.numpy(), avg_validation_loss.numpy(), 
+                                error_rate, impurity), length=50, end=False)
+                        print()
 
-                history['loss'].append([epoch, loss_value.numpy()])
-                tf.summary.scalar('loss', loss_value, step=epoch)
+                    history['val_loss'].append([epoch, avg_validation_loss.numpy()])
+                    tf.summary.scalar('val_loss', avg_validation_loss, step=epoch)
+
+                else: # new line for progress bar
+                    print()
+
+                history['loss'].append([epoch, avg_training_loss.numpy()])
+                tf.summary.scalar('loss', avg_training_loss, step=epoch)
                 
                 # 3. Compute the hidden representation y_i, and update S_i and omega_i from y_i
                 if self.recalculate_reconstruction_sets:
-                    data = self.recompute(data)
+                    data_ = self.recompute(data_)
 
         return history
 
@@ -314,6 +349,7 @@ class DeepLE(DeepGAE):
 
     def preprocess(self, X, y, batch_size=64):
         self.data = tf.convert_to_tensor(X)
+        self.data_encoded = self.encode(self.data)
         return super(DeepLE, self).preprocess(X, y, batch_size)
 
     def recompute(self, data):

@@ -107,3 +107,16 @@ def plot_history(history, metric_name, filepath=None):
         else:
             plt.show()
 
+def plot_history_2combined(history, metric_name_1, metric_name_2, filepath=None):
+    values1 = np.array(history[metric_name_1])
+    values2 = np.array(history[metric_name_2])
+    if len(values1) > 0 and len(values2):
+        fig_, ax = plt.subplots()
+        ax.plot(values1[:,0], values1[:,1], values2[:,0], values2[:,1])
+        plt.xlabel('epochs')
+        plt.ylabel(metric_name_1)
+        plt.legend([metric_name_1, metric_name_2])
+        if filepath is not None:
+            plt.savefig(filepath)
+        else:
+            plt.show()

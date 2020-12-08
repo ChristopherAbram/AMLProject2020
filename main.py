@@ -58,7 +58,7 @@ def main(argc, argv):
     input_size = image_shape[0] * image_shape[1]
     n_classes = 10
     batch_size = 64
-    n_samples = 7000
+    n_samples = 10000
     pretrain_epoch_ratio = 0.0
     validation_ratio = 0.2
     # How often run validation in model.fit(), e.g. 2 means run evaluate every 2 epochs:
@@ -72,7 +72,7 @@ def main(argc, argv):
     layers_configs = [[input_size, 200, 100]]
     learning_rates = [0.001]
     momentums = [0.5]
-    model_names = ['PCA']
+    model_names = ['LE']
 
     # Create all compination of hyperparametr lists:
     configs = it.product(model_names, epochs, layers_configs, learning_rates, momentums)
@@ -108,7 +108,6 @@ def main(argc, argv):
                 validation_freq=validation_freq,
                 validation_data=validation_data)
             
-    
             print("Saving model...")        
             model.save(save_path)
 
@@ -116,8 +115,10 @@ def main(argc, argv):
                 os.mkdir(save_path + "/img")
 
             # Plot loss function and other metrics:
-            plot_history(history, 'loss', filepath=os.path.join(save_path, 'img', 'loss.png'))
-            if run_validation_per_epoch:
+            if not run_validation_per_epoch:
+                plot_history(history, 'loss', filepath=os.path.join(save_path, 'img', 'loss.png'))
+            else:
+                plot_history_2combined(history, 'loss', 'val_loss', filepath=os.path.join(save_path, 'img', 'loss.png'))
                 plot_history(history, 'error_rate', filepath=os.path.join(save_path, 'img', 'error_rate.png'))
                 plot_history(history, 'impurity', filepath=os.path.join(save_path, 'img', 'impurity.png'))
 
