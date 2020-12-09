@@ -339,7 +339,7 @@ class DeepLDA(DeepGAE):
         return omega, S
 
 class DeepLE(DeepGAE):
-    def __init__(self, file_writer, k=10):
+    def __init__(self, file_writer, k=18):
         super(DeepLE, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = True
         self.k = k
@@ -372,11 +372,17 @@ class DeepLE(DeepGAE):
 
 
 class DeepMFA(DeepGAE):
-    def __init__(self, file_writer, k=18):
+    def __init__(self, file_writer, k1=15, k2=5):
         super(DeepMFA, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = True
         self.omega_classes = None
-        self.k = k
+        self.k1 = k1
+        self.k2 = k2
+
+    def stack_ragged(self, classes):
+        values = tf.concat(classes, axis=0)
+        lens = tf.stack([tf.shape(cl, out_type=tf.int64)[0] for cl in classes])
+        return tf.RaggedTensor.from_row_lengths(values, lens)
 
     def get_encoded_class_division(self, data):
         classes = [[] for i in range(self.n_classes)]
@@ -384,69 +390,74 @@ class DeepMFA(DeepGAE):
             for i, x in enumerate(encoded_batch):
                 class_label = self.get_class_label(y_batch[i])
                 classes[class_label].append(x)
-        
-        classes = [tf.RaggedTensor.from_tensor(c) for c in classes]
+        classes = [tf.convert_to_tensor(c) for c in classes]
         return classes
 
-    def preprocess(self, X, y):
-        X = X.map(lambda X_batch, y_batch: (X_batch, y_batch, None))
+    def get_class_division(self, data):
+        classes = [[] for i in range(self.n_classes)]
+        for X_batch, y_batch, encoded_batch in data:
+            for i, x in enumerate(X_batch):
+                class_label = self.get_class_label(y_batch[i])
+                classes[class_label].append(x)
+        classes = [tf.convert_to_tensor(c) for c in classes]
+        return classes
 
+    def preprocess(self, X, y, batch_size):
+        data = super(DeepMFA, self).preprocess(X, y, batch_size)
         # 1. group points into classes
-        self.omega_classes = np.array(self.get_class_division(X, y))
-        # 2. 
+        self.omega_classes = np.array(self.get_class_division(data))
         self.omega_classes_complement = []
         for Ci, X_class in enumerate(self.omega_classes):
             class_inx=list(range(self.n_classes))
             class_inx.pop(Ci)
-
             self.omega_classes_complement.append(
-                tf.concat(self.omega_classes[class_inx].tolist(), axis=0).to_tensor())
+                tf.concat(self.omega_classes[class_inx].tolist(), axis=0))
+        self.omega_classes = self.stack_ragged(self.omega_classes.tolist())
+        self.omega_classes_complement = self.stack_ragged(self.omega_classes_complement)
+        data_ = self.recompute(data)
+        return data
 
-        return X, y
-
-    def recompute(self, X, y):
-        X = X.map(lambda X_batch, y_batch, encoded_batch: (X_batch, y_batch, self.encode(X_batch)))
-
-        self.omega_encoded_classes = np.array(self.get_encoded_class_division(X, y))
+    def recompute(self, data):
+        data = data.map(lambda X_batch, y_batch, encoded_batch: (X_batch, y_batch, self.encode(X_batch)))
+        self.omega_encoded_classes = np.array(self.get_encoded_class_division(data))
         self.omega_encoded_classes_complement = []
         for Ci, X_class in enumerate(self.omega_encoded_classes):
             class_inx=list(range(self.n_classes))
             class_inx.pop(Ci)
             self.omega_encoded_classes_complement.append(
-                tf.concat(self.omega_encoded_classes[class_inx].tolist(), axis=0).to_tensor())
+                tf.concat(self.omega_encoded_classes[class_inx].tolist(), axis=0))
+        self.omega_encoded_classes = self.stack_ragged(self.omega_encoded_classes.tolist())
+        self.omega_encoded_classes_complement = self.stack_ragged(self.omega_encoded_classes_complement)
+        return data
 
-        return X, y
+    @tf.function
+    def mappingFunc(self, x, omega_classes, omega_classes_complement):
+        x_ = x[:-10]
+        label = self.get_class_label(x[-10:])
+        omega_k1_inx = knn(x_, omega_classes[label], k=self.k1)
+        omega_k2_inx = knn(x_, omega_classes_complement[label], k=self.k2)
+        return tf.concat([
+            tf.gather(self.omega_classes[label], omega_k1_inx), 
+            tf.gather(self.omega_classes_complement[label], omega_k2_inx)], axis=0)
     
-    def compute_reconstruction_set(self, encoded_batch, X_batch, y_batch):
-        X_batch_ = X_batch
-        omega_classes_ = self.omega_classes
-        omega_classes_complement_ = self.omega_classes_complement
-        if encoded_batch is not None:
-            X_batch_ = encoded_batch
-            omega_classes_ = self.omega_encoded_classes
-            omega_classes_complement_ = self.omega_encoded_classes_complement
-
-        def mappingFunc(i):
-            Ci = self.get_class_label(y_batch[i.numpy()])
-            omega_k1_inx = knn(X_batch_[i], omega_classes_[Ci].to_tensor())
-            omega_k2_inx = knn(X_batch_[i], omega_classes_complement_[Ci])
-            return tf.concat([
-                tf.gather(self.omega_classes[Ci].to_tensor(), omega_k1_inx), 
-                tf.gather(self.omega_classes_complement[Ci], omega_k2_inx)], axis=0)
-
-        return tf.map_fn(
-            fn=lambda i: mappingFunc(i),
-            elems=tf.range(X_batch.shape[0]), 
-            fn_output_signature=tf.TensorSpec(shape=(2*self.k, X_batch.shape[1])))
-
-    def compute_reconstruction_weights(self, encoded_batch, X_batch, y_batch):
-        return tf.map_fn(
-            fn=lambda i: \
+    @tf.function
+    def compute_reconstruction(self, encoded_batch, X_batch, y_batch):
+        X_batch_ = X_batch if encoded_batch is None else encoded_batch
+        omega_classes_ = self.omega_classes if encoded_batch is None else self.omega_encoded_classes
+        omega_classes_complement_ = self.omega_classes_complement \
+            if encoded_batch is None else self.omega_encoded_classes_complement
+        omega = tf.map_fn(
+            fn=lambda x: self.mappingFunc(x, omega_classes_, omega_classes_complement_),
+            elems=tf.concat(
+                [X_batch_, tf.cast(y_batch, X_batch_.dtype)], axis=1),
+            fn_output_signature=tf.TensorSpec(shape=(self.k1 + self.k2, X_batch.shape[1])))
+        S = tf.map_fn(
+            fn=lambda y: \
                 tf.convert_to_tensor(
-                    ([1.0] * self.k) + ([-1.0] * self.k), 
-                dtype=tf.float32), 
-            elems=tf.range(X_batch.shape[0]), 
-            fn_output_signature=tf.TensorSpec(shape=(2*self.k,)))
+                    ([1.0] * self.k1) + ([-1.0] * self.k2), dtype=tf.float32),
+            elems=y_batch, 
+            fn_output_signature=tf.TensorSpec(shape=(self.k1 + self.k2, )))
+        return omega, S
 
 def factory(model_name):
     logdir = os.path.join("logs", datetime.now().strftime("%Y%m%d-%H%M%S"))

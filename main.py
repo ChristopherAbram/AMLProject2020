@@ -59,7 +59,7 @@ def main(argc, argv):
     n_classes = 10
     batch_size = 64
     n_samples = 10000
-    pretrain_epoch_ratio = 0.0
+    pretrain_epoch_ratio = 0.1
     validation_ratio = 0.2
     # How often run validation in model.fit(), e.g. 2 means run evaluate every 2 epochs:
     validation_freq = 1
@@ -68,11 +68,11 @@ def main(argc, argv):
     run_validation_per_epoch = True # used only in main loop
 
     # Lists of hyperparametrs:
-    epochs = [100]
-    layers_configs = [[input_size, 200, 100]]
-    learning_rates = [0.001]
-    momentums = [0.5]
-    model_names = ['BalancedLDA']
+    epochs = [20]
+    layers_configs = [[input_size, 500, 200, 30]]
+    learning_rates = [0.003]
+    momentums = [0.3]
+    model_names = ['MFA']
 
     # Create all compination of hyperparametr lists:
     configs = it.product(model_names, epochs, layers_configs, learning_rates, momentums)
@@ -99,7 +99,8 @@ def main(argc, argv):
             
             model = factory(model_name)
             # Note! We use keras optimizer.
-            model.compile(optimizers.SGD(learning_rate=learning_rate, momentum=momentum), layers, n_classes)
+            # momentum=momentum
+            model.compile(optimizers.RMSprop(learning_rate=learning_rate, momentum=momentum), layers, n_classes)
 
             validation_data = (X_valid, y_valid) if run_validation_per_epoch else None
             history = model.fit(X_train, y_train, 
