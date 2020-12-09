@@ -506,7 +506,7 @@ def factory(model_name):
         return DeepBalancedLDA(file_writer)
     elif model_name == "LDA":
         return DeepLDA(file_writer)
-    elif model_name == "OldLDA":
+    elif model_name == "EagerLDA":
         return DeepEagerLDA(file_writer)
     elif model_name == "MFA":
         return DeepMFA(file_writer)
