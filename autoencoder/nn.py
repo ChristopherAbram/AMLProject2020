@@ -1,3 +1,4 @@
+from inspect import stack
 import numpy as np
 import tensorflow as tf
 import os
@@ -296,6 +297,44 @@ class DeepLDA(DeepGAE):
     def preprocess(self, X, y, batch_size):
         data = super(DeepLDA, self).preprocess(X, y, batch_size)
         self.omega_classes = self.get_class_division(data)
+        self.omega_counts = tf.cast(tf.convert_to_tensor([cl.shape[0] for cl in self.omega_classes]), tf.float32)
+        self.omega_classes = stack_ragged(self.omega_classes)
+        return data
+
+    def get_class_division(self, data):
+        classes = [[] for i in range(self.n_classes)]
+        for X_batch, y_batch, encoded_batch in data:
+            for i, x in enumerate(X_batch):
+                class_label = self.get_class_label(y_batch[i])
+                classes[class_label].append(x)
+        classes = [tf.convert_to_tensor(c) for c in classes]
+        return classes
+
+    @tf.function
+    def loss(self, omega, S, X_pred):
+        return tf.reduce_sum(
+            S * tf.square(tf.norm(
+                (omega - tf.expand_dims(X_pred, axis=1)).to_tensor(), axis=2)))
+    
+    @tf.function
+    def compute_reconstruction(self, encoded_batch, X_batch, y_batch):
+        omega = tf.gather(self.omega_classes, tf.argmax(y_batch, axis=1))
+        S = tf.map_fn(
+            fn=lambda y: tf.convert_to_tensor(
+                [1. / tf.gather(self.omega_counts, self.get_class_label(y))]),
+            elems=y_batch, 
+            fn_output_signature=tf.TensorSpec(shape=(1,), dtype=tf.float32))
+        return omega, S
+
+class DeepEagerLDA(DeepGAE):
+    def __init__(self, file_writer):
+        super(DeepEagerLDA, self).__init__(file_writer)
+        self.recalculate_reconstruction_sets = False
+        self.omega_classes = None
+
+    def preprocess(self, X, y, batch_size):
+        data = super(DeepEagerLDA, self).preprocess(X, y, batch_size)
+        self.omega_classes = self.get_class_division(data)
         return data
 
     def get_class_division(self, data):
@@ -339,7 +378,7 @@ class DeepLDA(DeepGAE):
         return omega, S
 
 class DeepLE(DeepGAE):
-    def __init__(self, file_writer, k=18):
+    def __init__(self, file_writer, k=10):
         super(DeepLE, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = True
         self.k = k
@@ -370,6 +409,10 @@ class DeepLE(DeepGAE):
                     tf.expand_dims(X_batch, axis=1) - omega, axis=2))) / self.t)
         return omega, S
 
+def stack_ragged(classes):
+    values = tf.concat(classes, axis=0)
+    lens = tf.stack([tf.shape(cl, out_type=tf.int64)[0] for cl in classes])
+    return tf.RaggedTensor.from_row_lengths(values, lens)
 
 class DeepMFA(DeepGAE):
     def __init__(self, file_writer, k1=15, k2=5):
@@ -378,11 +421,6 @@ class DeepMFA(DeepGAE):
         self.omega_classes = None
         self.k1 = k1
         self.k2 = k2
-
-    def stack_ragged(self, classes):
-        values = tf.concat(classes, axis=0)
-        lens = tf.stack([tf.shape(cl, out_type=tf.int64)[0] for cl in classes])
-        return tf.RaggedTensor.from_row_lengths(values, lens)
 
     def get_encoded_class_division(self, data):
         classes = [[] for i in range(self.n_classes)]
@@ -412,8 +450,8 @@ class DeepMFA(DeepGAE):
             class_inx.pop(Ci)
             self.omega_classes_complement.append(
                 tf.concat(self.omega_classes[class_inx].tolist(), axis=0))
-        self.omega_classes = self.stack_ragged(self.omega_classes.tolist())
-        self.omega_classes_complement = self.stack_ragged(self.omega_classes_complement)
+        self.omega_classes = stack_ragged(self.omega_classes.tolist())
+        self.omega_classes_complement = stack_ragged(self.omega_classes_complement)
         data_ = self.recompute(data)
         return data
 
@@ -426,8 +464,8 @@ class DeepMFA(DeepGAE):
             class_inx.pop(Ci)
             self.omega_encoded_classes_complement.append(
                 tf.concat(self.omega_encoded_classes[class_inx].tolist(), axis=0))
-        self.omega_encoded_classes = self.stack_ragged(self.omega_encoded_classes.tolist())
-        self.omega_encoded_classes_complement = self.stack_ragged(self.omega_encoded_classes_complement)
+        self.omega_encoded_classes = stack_ragged(self.omega_encoded_classes.tolist())
+        self.omega_encoded_classes_complement = stack_ragged(self.omega_encoded_classes_complement)
         return data
 
     @tf.function
@@ -468,6 +506,8 @@ def factory(model_name):
         return DeepBalancedLDA(file_writer)
     elif model_name == "LDA":
         return DeepLDA(file_writer)
+    elif model_name == "OldLDA":
+        return DeepEagerLDA(file_writer)
     elif model_name == "MFA":
         return DeepMFA(file_writer)
     elif model_name == "LE":

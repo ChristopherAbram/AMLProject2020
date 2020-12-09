@@ -68,11 +68,11 @@ def main(argc, argv):
     run_validation_per_epoch = True # used only in main loop
 
     # Lists of hyperparametrs:
-    epochs = [20]
+    epochs = [50]
     layers_configs = [[input_size, 500, 200, 30]]
     learning_rates = [0.003]
     momentums = [0.3]
-    model_names = ['MFA']
+    model_names = ['LDA']
 
     # Create all compination of hyperparametr lists:
     configs = it.product(model_names, epochs, layers_configs, learning_rates, momentums)
