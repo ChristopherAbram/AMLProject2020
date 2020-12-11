@@ -32,7 +32,7 @@ def dataset(num_sets = 30, validation_ratio = 0.2):
     # Normalize and reshape:
     image_shape = X_train[0].shape
     X_train = (X_train.astype(np.float32) / 255.0).reshape((X_train.shape[0], image_shape[0] * image_shape[1]))
-    X_test = (X_train.astype(np.float32) / 255.0).reshape((X_train.shape[0], image_shape[0] * image_shape[1]))
+    X_test = (X_test.astype(np.float32) / 255.0).reshape((X_test.shape[0], image_shape[0] * image_shape[1]))
 
     # Calculate set sizes
     set_size = math.floor(MNIST_size/num_sets)

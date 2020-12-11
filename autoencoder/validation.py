@@ -54,7 +54,7 @@ def tf_error_rate_impurity(X_encoded, X, y, k=18):
 
 # 2D GRAPH
 def scatter_plot_2d(filepath, X_valid_encoded, X_valid, y_valid, n_classes):
-    fig_, ax = plt.subplots()
+    fig, ax = plt.subplots()
     class_points_x = [[] for i in range(n_classes)]
     class_points_y = [[] for i in range(n_classes)]
     for i, (e, y) in enumerate(zip(X_valid_encoded, y_valid)):
@@ -66,6 +66,7 @@ def scatter_plot_2d(filepath, X_valid_encoded, X_valid, y_valid, n_classes):
         ax.scatter(class_points_x[label], class_points_y[label], label="%d" % label)
     plt.legend()
     plt.savefig(filepath + "/img/2d_encode.png")
+    plt.close(fig)
 
 def encoded_display_shape(hidden_size):
     width = math.sqrt(hidden_size)
@@ -94,11 +95,12 @@ def plot_table(filepath, X_valid, X_valid_predicted, X_valid_encoded,
         axs_[i * 3 + 1].imshow(img_pred, cmap='gray')
         axs_[i * 3 + 2].imshow(img_encoded, cmap='gray')
     plt.savefig(filepath + "/img/predict.png")
+    plt.close(fig)
 
 def plot_history(history, metric_name, filepath=None):
     values = np.array(history[metric_name])
     if len(values) > 0:
-        fig_, ax = plt.subplots()
+        fig, ax = plt.subplots()
         ax.plot(values[:,0], values[:,1])
         plt.xlabel('epochs')
         plt.ylabel(metric_name)
@@ -106,12 +108,13 @@ def plot_history(history, metric_name, filepath=None):
             plt.savefig(filepath)
         else:
             plt.show()
+        plt.close(fig)
 
 def plot_history_2combined(history, metric_name_1, metric_name_2, filepath=None):
     values1 = np.array(history[metric_name_1])
     values2 = np.array(history[metric_name_2])
     if len(values1) > 0 and len(values2):
-        fig_, ax = plt.subplots()
+        fig, ax = plt.subplots()
         ax.plot(values1[:,0], values1[:,1], values2[:,0], values2[:,1])
         plt.xlabel('epochs')
         plt.ylabel(metric_name_1)
@@ -120,3 +123,4 @@ def plot_history_2combined(history, metric_name_1, metric_name_2, filepath=None)
             plt.savefig(filepath)
         else:
             plt.show()
+        plt.close(fig)
