@@ -53,7 +53,7 @@ def tf_error_rate_impurity(X_encoded, X, y, k=18):
     return errr_, impr_
 
 # 2D GRAPH
-def scatter_plot_2d(filepath, X_valid_encoded, X_valid, y_valid, n_classes):
+def scatter_plot_2d(filepath, X_valid_encoded, X_valid, y_valid, n_classes, j=0):
     fig, ax = plt.subplots()
     class_points_x = [[] for i in range(n_classes)]
     class_points_y = [[] for i in range(n_classes)]
@@ -65,7 +65,8 @@ def scatter_plot_2d(filepath, X_valid_encoded, X_valid, y_valid, n_classes):
     for label in range(n_classes):
         ax.scatter(class_points_x[label], class_points_y[label], label="%d" % label)
     plt.legend()
-    plt.savefig(filepath + "/img/2d_encode.png")
+    plt.savefig(filepath + "/2d_encode"+str(j)+".png")
+    # plt.show()
     plt.close(fig)
 
 def encoded_display_shape(hidden_size):

@@ -68,86 +68,87 @@ def main(argc, argv):
     run_validation_per_epoch = True # used only in main loop
 
     # Lists of hyperparametrs:
-    epochs = [50]
-    layers_configs = [[input_size, 500, 200, 30]]
-    learning_rates = [0.003]
-    momentums = [0.3]
-    model_names = ['LDA']
+    epochs = [20]
+    layers_configs = [[input_size, 500, 200, 2]]
+    learning_rates = [0.001]
+    momentums = [0.9]
+    model_names = ['LE']
 
     # Create all compination of hyperparametr lists:
     configs = it.product(model_names, epochs, layers_configs, learning_rates, momentums)
 
-    # with tf.device('CPU:0'):
-    train_valid_set, test_set = dataset(MNIST_size // n_samples, validation_ratio)
-    for i, (model_name, n_epochs, layers, learning_rate, momentum) in enumerate(configs):
-        layer_string = '-'.join(str(x) for x in layers)
-        print("########################################################")
-        print("Validating config: %s model - %d epochs - %d samples - %s layers - %f learning rate - %f momentum - %d batch size" % 
-            (model_name, n_epochs, n_samples, layer_string, learning_rate, momentum, batch_size))
-        (X_train, y_train), (X_valid, y_valid) = train_valid_set[i]
+    with tf.device('CPU:0'):
+        train_valid_set, (X_test, y_test) = dataset(MNIST_size // n_samples, validation_ratio)
+        for i, (model_name, n_epochs, layers, learning_rate, momentum) in enumerate(configs):
+            layer_string = '-'.join(str(x) for x in layers)
+            print("########################################################")
+            print("Validating config: %s model - %d epochs - %d samples - %s layers - %f learning rate - %f momentum - %d batch size" % 
+                (model_name, n_epochs, n_samples, layer_string, learning_rate, momentum, batch_size))
+            (X_train, y_train), (X_valid, y_valid) = train_valid_set[i]
 
-        save_path = ".models/" + "_".join(
-            (model_name, str(n_epochs), str(batch_size), str(n_samples), 
-                str(layer_string), str(learning_rate), str(momentum)))
+            save_path = ".models/" + "_".join(
+                (model_name, str(n_epochs), str(batch_size), str(n_samples), 
+                    str(layer_string), str(learning_rate), str(momentum)))
 
-        if os.path.exists(save_path) and load_existing_model:
-            print("Loading existing model...")
-            model = load_model(save_path)
-            
-        else:
-            print("Training new model...")
-            
-            model = factory(model_name)
-            # Note! We use keras optimizer.
-            # momentum=momentum
-            model.compile(optimizers.RMSprop(learning_rate=learning_rate, momentum=momentum), layers, n_classes)
-
-            validation_data = (X_valid, y_valid) if run_validation_per_epoch else None
-            history = model.fit(X_train, y_train, 
-                epochs=n_epochs, 
-                pretrain_epochs=(pretrain_epoch_ratio * n_epochs),
-                validation_freq=validation_freq,
-                validation_data=validation_data)
-            
-            print("Saving model...")        
-            model.save(save_path)
-
-            if not os.path.exists(save_path + "/img"):
-                os.mkdir(save_path + "/img")
-
-            # Plot loss function and other metrics:
-            if not run_validation_per_epoch:
-                plot_history(history, 'loss', filepath=os.path.join(save_path, 'img', 'loss.png'))
+            if os.path.exists(save_path) and load_existing_model:
+                print("Loading existing model...")
+                model = load_model(save_path)
+                
             else:
-                plot_history_2combined(history, 'loss', 'val_loss', filepath=os.path.join(save_path, 'img', 'loss.png'))
-                plot_history(history, 'error_rate', filepath=os.path.join(save_path, 'img', 'error_rate.png'))
-                plot_history(history, 'impurity', filepath=os.path.join(save_path, 'img', 'impurity.png'))
+                print("Training new model...")
+                
+                model = factory(model_name)
+                # Note! We use keras optimizer.
+                # momentum=momentum
+                model.compile(optimizers.RMSprop(learning_rate=learning_rate, momentum=momentum), layers, n_classes)
 
-        error_rate, impurity = model.evaluate(X_valid, y_valid)
-        print("ERROR RATE: %f%%" % error_rate)
-        print("AVG. IMPURITY: %f" % impurity)
-        info_file = open(save_path+"/info.txt","w+")
-        info_file.write("ERROR RATE: %f%%" % error_rate)
-        info_file.write("AVG. IMPURITY: %f" % impurity)
-        info_file.close()
+                validation_data = (X_valid, y_valid) if run_validation_per_epoch else None
+                history = model.fit(X_train, y_train, 
+                    epochs=n_epochs, 
+                    pretrain_epochs=(pretrain_epoch_ratio * n_epochs),
+                    validation_freq=validation_freq,
+                    validation_data=validation_data)
+                
+                print("Saving model...")        
+                model.save(save_path)
+
+                if not os.path.exists(save_path + "/img"):
+                    os.mkdir(save_path + "/img")
+
+                # Plot loss function and other metrics:
+                if not run_validation_per_epoch:
+                    plot_history(history, 'loss', filepath=os.path.join(save_path, 'img', 'loss.png'))
+                else:
+                    plot_history_2combined(history, 'loss', 'val_loss', filepath=os.path.join(save_path, 'img', 'loss.png'))
+                    plot_history(history, 'error_rate', filepath=os.path.join(save_path, 'img', 'error_rate.png'))
+                    plot_history(history, 'impurity', filepath=os.path.join(save_path, 'img', 'impurity.png'))
+
+            # error_rate, impurity = model.evaluate(X_test, y_test)
+            # print("ERROR RATE: %f%%" % error_rate)
+            # print("AVG. IMPURITY: %f" % impurity)
+            # info_file = open(save_path+"/info.txt","w+")
+            # info_file.write("ERROR RATE: %f%%" % error_rate)
+            # info_file.write("AVG. IMPURITY: %f" % impurity)
+            # info_file.close()
 
 
-        X_valid_encoded = model.encode(X_valid)
-        X_valid_predicted = model.predict(X_valid)
-        width, height = encoded_display_shape(layers[len(layers) - 1])
+            X_valid_encoded = model.encode(X_test)
+            X_valid_predicted = model.predict(X_test)
+            width, height = encoded_display_shape(layers[len(layers) - 1])
 
-        # 2D GRAPH
-        if width == 2:
-            scatter_plot_2d(save_path, X_valid_encoded, X_valid, y_valid, n_classes)
+            # 2D GRAPH
+            if width == 2:
+                scatter_plot_2d(save_path, model.encode(X_valid), X_valid, y_valid, n_classes)
+                scatter_plot_2d(save_path, X_valid_encoded, X_test, y_test, n_classes)
 
-        # Visualize reconstructed images:
-        plot_col, plot_row = 3, 9
-        X_valid = X_valid[:plot_col * plot_row]
-        X_valid_encoded = X_valid_encoded[:plot_col * plot_row]
-        X_valid_predicted = X_valid_predicted[:plot_col * plot_row]
+            # Visualize reconstructed images:
+            plot_col, plot_row = 3, 9
+            X_test = X_test[:plot_col * plot_row]
+            X_valid_encoded = X_valid_encoded[:plot_col * plot_row]
+            X_valid_predicted = X_valid_predicted[:plot_col * plot_row]
 
-        plot_table(save_path, X_valid, X_valid_predicted, X_valid_encoded, 
-            image_shape, (width, height), (plot_row, plot_col))
+            plot_table(save_path, X_test, X_valid_predicted, X_valid_encoded, 
+                image_shape, (width, height), (plot_row, plot_col))
 
     return 0
 

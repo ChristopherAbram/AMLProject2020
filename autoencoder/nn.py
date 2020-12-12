@@ -4,7 +4,7 @@ import tensorflow as tf
 import os
 from datetime import datetime
 
-from autoencoder.validation import error_rate_impurity, tf_error_rate_impurity
+from autoencoder.validation import error_rate_impurity, tf_error_rate_impurity, scatter_plot_2d
 
 # From: https://stackoverflow.com/questions/3173320/text-progress-bar-in-the-console
 def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r", end=True):
@@ -177,6 +177,7 @@ class DeepGAE(tf.Module):
 
                 # Validation loop
                 if validation_data_ is not None:
+                    scatter_plot_2d("./gif", self.encode(validation_data[0]), validation_data[0], validation_data[1], 10, epoch)
                     for val_step, (X_batch, y_batch) in enumerate(validation_data_):
                         encoded_batch = self.encode(X_batch)
                         omega_batch, S_batch = self.compute_reconstruction(
@@ -415,7 +416,7 @@ def stack_ragged(classes):
     return tf.RaggedTensor.from_row_lengths(values, lens)
 
 class DeepMFA(DeepGAE):
-    def __init__(self, file_writer, k1=15, k2=5):
+    def __init__(self, file_writer, k1=50, k2=10):
         super(DeepMFA, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = True
         self.omega_classes = None
