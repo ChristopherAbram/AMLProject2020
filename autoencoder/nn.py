@@ -473,7 +473,7 @@ class DeepLE(DeepGAE):
             fn_output_signature=tf.TensorSpec(shape=(self.k, X_batch.shape[1])))
         S = tf.exp(tf.negative(
                 tf.square(tf.norm(
-                    tf.expand_dims(X_batch, axis=1) - omega, axis=2))) / self.t)
+                    tf.expand_dims(X_batch, axis=1) - omega, axis=2)) / self.t))
         return omega, S
 
 def stack_ragged(classes):
