@@ -446,7 +446,7 @@ class DeepLE(DeepGAE):
         super(DeepLE, self).__init__(file_writer)
         self.recalculate_reconstruction_sets = True
         self.k = k
-        self.t = 1.
+        self.t = 1.2
         self.data = None
         self.data_encoded = None
 
