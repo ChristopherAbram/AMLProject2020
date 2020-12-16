@@ -5,3 +5,4 @@ logs/*
 /img/dgae_pca.png
 /env/
 **/__pycache__/*
+/.models/
